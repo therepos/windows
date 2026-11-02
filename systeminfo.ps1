@@ -89,8 +89,37 @@ function Get-LaptopReport {
     "=== BATTERY / POWER ==="
     Get-CimInstance Win32_Battery | Select-Object Name,EstimatedChargeRemaining,BatteryStatus,DesignVoltage | Format-List
     powercfg /getactivescheme
-    powercfg /batteryreport /output (Join-Path $OutDir "battery_$Stamp.html") | Out-Null
-    "Detailed battery health report saved as battery_$Stamp.html"
+    "=== BATTERY HEALTH ==="
+    $xmlPath = Join-Path $env:TEMP "battery_$Stamp.xml"
+    powercfg /batteryreport /xml /output $xmlPath | Out-Null
+    if (Test-Path $xmlPath) {
+        [xml]$br = Get-Content $xmlPath -Raw
+        Remove-Item $xmlPath -Force
+        foreach ($b in @($br.BatteryReport.Batteries.Battery)) {
+            $design = [double]$b.DesignCapacity
+            $full   = [double]$b.FullChargeCapacity
+            [pscustomobject]@{
+                Battery            = $b.Id
+                Manufacturer       = $b.Manufacturer
+                Chemistry          = $b.Chemistry
+                DesignCapacity_mWh = $design
+                FullCharge_mWh     = $full
+                HealthPercent      = if ($design -gt 0) { [math]::Round($full / $design * 100, 1) } else { 'n/a' }
+                CycleCount         = $b.CycleCount
+            } | Format-List
+        }
+        $est = $br.BatteryReport.RuntimeEstimates
+        if ($est) {
+            "Estimated runtime at full charge:   " + $est.FullChargeCapacity.ActiveRuntime
+            "Estimated runtime at design charge: " + $est.DesignCapacity.ActiveRuntime
+        }
+        "--- Capacity history (last 10 periods) ---"
+        @($br.BatteryReport.History.HistoryEntry) | Select-Object -Last 10 |
+            Select-Object StartDate,EndDate,@{n='FullCharge_mWh';e={$_.FullChargeCapacity}},@{n='Design_mWh';e={$_.DesignCapacity}},CycleCount |
+            Format-Table -AutoSize
+    } else {
+        "No battery detected."
+    }
 
     Say "  [8/12] Network..." 'DarkGray'
     "=== NETWORK ADAPTERS ==="
@@ -126,7 +155,6 @@ function Get-LaptopReport {
 
     Stop-Transcript | Out-Null
     Finish-Report -Path $out -Label 'Laptop report'
-    Say "  A battery health file (battery_$Stamp.html) is in the same folder." 'DarkGray'
 }
 
 # =====================================================================
