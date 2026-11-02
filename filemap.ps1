@@ -9,7 +9,7 @@
 #               -> filemap <PC> yyyyMMdd-HHmm.csv (opens in Excel)
 #               mapped drives are written as \\server\share paths so links
 #               work for anyone with access; over ~1 million files it splits
-#               into "part 2", "part 3", ...
+#               into ...-a.csv, ...-b.csv, ...
 #   0 = Quit
 #  Output: Downloads. Hidden and system files are included; folders that
 #  cannot be opened are listed at the end. Read-only: nothing is changed,
@@ -209,7 +209,12 @@ function New-FileIndex {
     $newPart = {
         if ($state.W) { $state.W.Close() }
         $state.Part++
-        $p = if ($state.Part -eq 1) { "$base.csv" } else { "$base part $($state.Part).csv" }
+        # One file: <base>.csv. Once a second is needed, the first becomes -a, then -b, -c, ...
+        if ($state.Part -eq 2) {
+            Rename-Item -LiteralPath "$base.csv" -NewName (Split-Path "$base-a.csv" -Leaf)
+            $paths[0] = "$base-a.csv"
+        }
+        $p = if ($state.Part -eq 1) { "$base.csv" } else { "$base-$([char](96 + $state.Part)).csv" }
         $paths.Add($p)
         $state.W = New-Writer $p
         $state.W.WriteLine($header)
@@ -235,7 +240,7 @@ function New-FileIndex {
                     (ConvertTo-LinkCell $full 'Open folder'), (ConvertTo-Cell $full))
                 return
             }
-            if ($OutPaths -contains $full) { return }
+            if ($full.StartsWith($OutBase, [StringComparison]::OrdinalIgnoreCase)) { return }
             $files++
             $bytes += $_.Length
             $relFolder = Get-Parent $rel
@@ -299,7 +304,7 @@ $Target      = Read-TargetFolder
 $DisplayRoot = Get-DisplayRoot $Target
 $WalkRoot    = Get-WalkRoot $Target
 $OutDir      = Get-DownloadsFolder
-$OutPaths    = @(Join-Path $OutDir "filemap $env:COMPUTERNAME $Stamp.csv")
+$OutBase     = Join-Path $OutDir "filemap $env:COMPUTERNAME $Stamp"
 $Errors      = New-Object System.Collections.Generic.List[object]
 $Links       = New-Object System.Collections.Generic.List[string]
 $Clock       = [Diagnostics.Stopwatch]::StartNew()
