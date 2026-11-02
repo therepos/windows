@@ -2,10 +2,11 @@
 # Purpose: Collect raw hardware/software info from a Windows laptop and/or Android phone
 # =============================================================================
 #  System Info Collector:
-#   1 = Windows laptop   
-#   2 = Android phone   
+#   1 = Windows laptop
+#   2 = Android phone
 #   3 = Both
-#  Output: \Desktop\SystemReports.
+#   0 = Quit
+#  Output: asks for a folder, defaults to Downloads.
 #
 # =============================================================================
 
@@ -17,9 +18,9 @@ $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
            ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $IsAdmin) {
     Write-Host "  Requesting administrator rights..." -ForegroundColor Yellow
-    $cmd = "[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; irm '${ScriptUrl}?$(Get-Random)' | iex"
+    $cmd = "[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; try { irm '${ScriptUrl}?$(Get-Random)' | iex } catch { Write-Host `$_ -ForegroundColor Red; Read-Host 'Press Enter to exit' }"
     Start-Process -FilePath 'powershell.exe' -Verb RunAs `
-        -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit', '-Command', $cmd
+        -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $cmd
     Write-Host "  Continue in the new (elevated) window. You can close this one." -ForegroundColor Gray
     return
 }
@@ -27,13 +28,35 @@ if (-not $IsAdmin) {
 $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference    = 'SilentlyContinue'
 
-$Desktop = [Environment]::GetFolderPath('Desktop')
-if ([string]::IsNullOrWhiteSpace($Desktop) -or -not (Test-Path $Desktop)) { $Desktop = $env:USERPROFILE }
-$OutDir = Join-Path $Desktop 'SystemReports'
-New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
+$OutDir = $null
 $Stamp = Get-Date -Format 'yyyy-MM-dd_HHmm'
 
 function Say($msg, $color = 'Gray') { Write-Host $msg -ForegroundColor $color }
+
+function Get-DownloadsFolder {
+    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders'
+    $raw = (Get-ItemProperty -Path $key).'{374DE290-123F-4565-9164-39C4925E467B}'
+    if ($raw) {
+        $path = [Environment]::ExpandEnvironmentVariables($raw)
+        if (Test-Path $path) { return $path }
+    }
+    return (Join-Path $env:USERPROFILE 'Downloads')
+}
+
+function Select-OutputFolder {
+    $default = Get-DownloadsFolder
+    while ($true) {
+        Say ""
+        Say "  Where should the report be saved?" 'Cyan'
+        $answer = Read-Host "  Folder [$default]"
+        $path = if ([string]::IsNullOrWhiteSpace($answer)) { $default } else { [Environment]::ExpandEnvironmentVariables($answer.Trim().Trim('"')) }
+        New-Item -ItemType Directory -Path $path -Force -ErrorAction SilentlyContinue | Out-Null
+        if (Test-Path -LiteralPath $path -PathType Container) {
+            return (Resolve-Path -LiteralPath $path).ProviderPath
+        }
+        Say "  Cannot use '$path'. Try another folder." 'Red'
+    }
+}
 
 function Finish-Report {
     param([string]$Path, [string]$Label)
@@ -294,26 +317,31 @@ function Get-PhoneReport {
 #  MENU
 # =====================================================================
 Clear-Host
-while ($true) {
-    Say ""
-    Say "  =============================================" 'Cyan'
-    Say "        SYSTEM INFO COLLECTOR" 'Cyan'
-    Say "  =============================================" 'Cyan'
-    Say ""
-    Say "    1  -  This Windows laptop" 'White'
-    Say "    2  -  Android phone (USB cable needed)" 'White'
-    Say "    3  -  Both" 'White'
-    Say "    O  -  Open the reports folder" 'White'
-    Say "    Q  -  Quit" 'White'
-    Say ""
-    $choice = Read-Host "  Type a number and press Enter"
+Say ""
+Say "  =============================================" 'Cyan'
+Say "        SYSTEM INFO COLLECTOR" 'Cyan'
+Say "  =============================================" 'Cyan'
+Say ""
+Say "    1  -  This Windows laptop" 'White'
+Say "    2  -  Android phone (USB cable needed)" 'White'
+Say "    3  -  Both" 'White'
+Say "    0  -  Quit" 'White'
+Say ""
 
-    switch ($choice.Trim().ToUpper()) {
-        '1' { Get-LaptopReport }
-        '2' { Get-PhoneReport }
-        '3' { Get-LaptopReport; Get-PhoneReport }
-        'O' { Start-Process explorer.exe $OutDir }
-        'Q' { Say ""; Say "  Reports are in: $OutDir" 'Green'; Say ""; return }
-        default { Say "  Please type 1, 2, 3, O or Q." 'Red' }
-    }
+do {
+    $choice = "$(Read-Host '  Choose 0-3 and press Enter')".Trim()
+    if ($choice -notin '0','1','2','3') { Say "  Please type 1, 2, 3 or 0." 'Red' }
+} until ($choice -in '0','1','2','3')
+
+if ($choice -eq '0') { return }
+
+$OutDir = Select-OutputFolder
+switch ($choice) {
+    '1' { Get-LaptopReport }
+    '2' { Get-PhoneReport }
+    '3' { Get-LaptopReport; Get-PhoneReport }
 }
+
+Say "  Reports are in: $OutDir" 'Green'
+Say ""
+Read-Host "  Press Enter to exit" | Out-Null
