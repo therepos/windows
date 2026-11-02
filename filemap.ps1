@@ -1,7 +1,7 @@
-# irm https://github.com/therepos/windows/raw/main/filelist.ps1 | iex
+# irm https://github.com/therepos/windows/raw/main/filemap.ps1 | iex
 # Purpose: List every file in a folder and its subfolders, as a text list or a clickable Excel index
 # =============================================================================
-#  File List:
+#  File Map:
 #   1 = List    every file (relative path, size, modified), sorted, one per line
 #               -> File List <Folder> <PC> yyyyMMdd-HHmm.txt
 #               for comparing two machines (e.g. paste both lists into an AI)
@@ -289,7 +289,7 @@ function Finish([string[]]$Paths, [int]$Files, [long]$Bytes) {
 Clear-Host
 Say ""
 Say "  =============================================" 'Cyan'
-Say "        FILE LIST" 'Cyan'
+Say "        FILE MAP" 'Cyan'
 Say "  =============================================" 'Cyan'
 Say ""
 Say "    1  -  List (text)" 'White'
