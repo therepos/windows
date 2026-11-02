@@ -2,17 +2,19 @@
 # Purpose: Zip files into a password-protected 7z (auto-split over 500 MB) or unzip one, split sets included
 # =============================================================================
 #  Zipper:
-#   1 = Zip     files/folders -> YYYYMMDD-HHMMSS (no extension)
-#               over 500 MB   -> YYYYMMDD-HHMMSS.001, .002, ...
-#   2 = Unzip   archive or any part of a split set -> <name>-extracted
+#   1 = Zip       files/folders -> YYYYMMDD-HHMMSS (no extension)
+#                 over the split size -> YYYYMMDD-HHMMSS.001, .002, ...
+#   2 = Unzip     archive or any part of a split set -> <name>-extracted
+#   3 = Settings  password, save-to folder, split size (kept between runs;
+#                 password stored encrypted for this Windows user)
 #   0 = Quit
-#  Password: Enter = default. Output: asks for a folder, defaults to Downloads.
+#  Defaults: password Zip@2026!, Downloads, split at 500 MB.
 #  Uses an installed 7-Zip, otherwise downloads the standalone 7za.exe
 #  into %LOCALAPPDATA%\zipper (no admin needed).
 # =============================================================================
 
 $DefaultPassword = 'Zip@2026!'
-$SplitMB         = 500
+$DefaultSplitMB  = 500
 $ToolDir         = Join-Path $env:LOCALAPPDATA 'zipper'
 $ExtraUrl        = 'https://www.7-zip.org/a/7z2409-extra.7z'
 $SevenZrUrl      = 'https://www.7-zip.org/a/7zr.exe'
@@ -109,36 +111,116 @@ function Get-DownloadsFolder {
     return (Join-Path $env:USERPROFILE 'Downloads')
 }
 
-function Select-OutputFolder {
-    $default = Get-DownloadsFolder
-    while ($true) {
-        Say ""
-        Say "  Where should it be saved?" 'Cyan'
-        $answer = Read-Host "  Folder [$default]"
-        $path = if ([string]::IsNullOrWhiteSpace($answer)) { $default } else { [Environment]::ExpandEnvironmentVariables($answer.Trim().Trim('"').Trim("'")) }
-        New-Item -ItemType Directory -Path $path -Force -ErrorAction SilentlyContinue | Out-Null
-        if (Test-Path -LiteralPath $path -PathType Container) {
-            return (Resolve-Path -LiteralPath $path).ProviderPath
-        }
-        Say "  Cannot use '$path'. Try another folder." 'Red'
-    }
-}
-
 function ConvertFrom-Secure($secure) {
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     try { [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 }
 
-function Read-Password([switch]$Confirm) {
+# =====================================================================
+#  SETTINGS  (%LOCALAPPDATA%\zipper\settings.json)
+# =====================================================================
+$SettingsFile = Join-Path $ToolDir 'settings.json'
+
+function Import-Settings {
+    $s = [pscustomobject]@{ Password = $null; OutDir = $null; SplitMB = $DefaultSplitMB }
+    try {
+        $saved = Get-Content -LiteralPath $SettingsFile -Raw -ErrorAction Stop | ConvertFrom-Json
+        if ($saved.Password) { $s.Password = [string]$saved.Password }
+        if ($saved.OutDir)   { $s.OutDir   = [string]$saved.OutDir }
+        if ($null -ne $saved.SplitMB) { $s.SplitMB = [int]$saved.SplitMB }
+    } catch {}
+    return $s
+}
+
+function Export-Settings {
+    New-Item -ItemType Directory -Path $ToolDir -Force | Out-Null
+    $Settings | ConvertTo-Json | Set-Content -LiteralPath $SettingsFile -Encoding UTF8
+}
+
+# Saved password is DPAPI-encrypted: only this Windows user on this PC can read it
+function Get-Password {
+    if ($Settings.Password) {
+        try { return ConvertFrom-Secure ($Settings.Password | ConvertTo-SecureString) } catch {}
+    }
+    return $DefaultPassword
+}
+
+function Get-OutputDir {
+    $dir = if ($Settings.OutDir) { $Settings.OutDir } else { Get-DownloadsFolder }
+    New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null
+    if (Test-Path -LiteralPath $dir -PathType Container) { return $dir }
+    Say "  Cannot use '$dir' - saving to Downloads instead." 'Yellow'
+    return (Get-DownloadsFolder)
+}
+
+function Set-PasswordSetting {
     Say ""
     while ($true) {
-        $s = Read-Host '  Password [Enter = default]' -AsSecureString
-        if ($s.Length -eq 0) { return $DefaultPassword }
-        $pw = ConvertFrom-Secure $s
-        if (-not $Confirm) { return $pw }
-        if ((ConvertFrom-Secure (Read-Host '  Confirm password' -AsSecureString)) -ceq $pw) { return $pw }
+        $s = Read-Host '  New password (Enter = back to default)' -AsSecureString
+        if ($s.Length -eq 0) { $Settings.Password = $null; Say "  Password: default" 'Green'; return }
+        $c = Read-Host '  Confirm password' -AsSecureString
+        if ((ConvertFrom-Secure $c) -ceq (ConvertFrom-Secure $s)) {
+            $Settings.Password = $s | ConvertFrom-SecureString
+            Say "  Password saved." 'Green'
+            return
+        }
         Say "  Passwords differ, try again." 'Red'
+    }
+}
+
+function Set-OutDirSetting {
+    Say ""
+    while ($true) {
+        $answer = Read-Host "  Save to folder (Enter = Downloads)"
+        if ([string]::IsNullOrWhiteSpace($answer)) { $Settings.OutDir = $null; Say "  Save to: Downloads" 'Green'; return }
+        $path = [Environment]::ExpandEnvironmentVariables($answer.Trim().Trim('"').Trim("'"))
+        New-Item -ItemType Directory -Path $path -Force -ErrorAction SilentlyContinue | Out-Null
+        if (Test-Path -LiteralPath $path -PathType Container) {
+            $Settings.OutDir = (Resolve-Path -LiteralPath $path).ProviderPath
+            Say "  Save to: $($Settings.OutDir)" 'Green'
+            return
+        }
+        Say "  Cannot use '$path'. Try another folder." 'Red'
+    }
+}
+
+function Set-SplitSetting {
+    Say ""
+    while ($true) {
+        $answer = "$(Read-Host "  Split into parts of how many MB? (0 = never split, Enter = $DefaultSplitMB)")".Trim()
+        if (-not $answer) { $answer = "$DefaultSplitMB" }
+        $mb = 0
+        if ([int]::TryParse($answer, [ref]$mb) -and $mb -ge 0) {
+            $Settings.SplitMB = $mb
+            Say $(if ($mb -eq 0) { "  Split: never" } else { "  Split: $mb MB parts" }) 'Green'
+            return
+        }
+        Say "  Please type a whole number, e.g. 500." 'Red'
+    }
+}
+
+function Show-Settings {
+    while ($true) {
+        $pw    = if ($Settings.Password) { 'custom' } else { 'default' }
+        $out   = if ($Settings.OutDir) { $Settings.OutDir } else { "Downloads" }
+        $split = if ($Settings.SplitMB -gt 0) { "$($Settings.SplitMB) MB" } else { 'never' }
+        Say ""
+        Say "  ---------------- SETTINGS -------------------" 'Cyan'
+        Say ""
+        Say "    1  -  Set password          [$pw]" 'White'
+        Say "    2  -  Set output location   [$out]" 'White'
+        Say "    3  -  Set split size        [$split]" 'White'
+        Say "    0  -  Back" 'White'
+        Say ""
+        $c = "$(Read-Host '  Choose 0-3 and press Enter')".Trim()
+        switch ($c) {
+            '1' { Set-PasswordSetting; Export-Settings }
+            '2' { Set-OutDirSetting;   Export-Settings }
+            '3' { Set-SplitSetting;    Export-Settings }
+            '0' { return }
+            default { Say "  Please type 1, 2, 3 or 0." 'Red' }
+        }
     }
 }
 
@@ -181,8 +263,9 @@ function Invoke-Zip {
         $p = [Environment]::ExpandEnvironmentVariables($raw)
         if (Test-Path -LiteralPath $p) { (Resolve-Path -LiteralPath $p).ProviderPath }
     }
-    $password = Read-Password -Confirm
-    $outDir   = Select-OutputFolder
+    $password = Get-Password
+    $outDir   = Get-OutputDir
+    $SplitMB  = $Settings.SplitMB
 
     $total = 0
     foreach ($t in $targets) {
@@ -192,7 +275,7 @@ function Invoke-Zip {
             $total += (Get-Item -LiteralPath $t -Force).Length
         }
     }
-    $split = $total -gt ($SplitMB * 1MB)
+    $split = $SplitMB -gt 0 -and $total -gt ($SplitMB * 1MB)
 
     $base = Join-Path $outDir (Get-Date -Format 'yyyyMMdd-HHmmss')
     $args7z = @('a', '-t7z', "-p$password", '-mhe=on', '-mx=5')
@@ -261,8 +344,8 @@ function Test-SplitSet([string]$first) {
 
 function Invoke-Unzip {
     $archives = Read-DroppedPaths 'archives (any part of a split set is fine)' { param($raw) Resolve-Archive $raw }
-    $password = Read-Password
-    $outDir   = Select-OutputFolder
+    $password = Get-Password
+    $outDir   = Get-OutputDir
     Say ""
 
     $ok = 0
@@ -371,20 +454,23 @@ function Reset-WindowLayout($console) {
 Clear-Host
 $Console = Set-WindowLayout
 try {
-    Say ""
-    Say "  =============================================" 'Cyan'
-    Say "        ZIPPER" 'Cyan'
-    Say "  =============================================" 'Cyan'
-    Say ""
-    Say "    1  -  Zip (password-protected, split over $SplitMB MB)" 'White'
-    Say "    2  -  Unzip (split sets handled)" 'White'
-    Say "    0  -  Quit" 'White'
-    Say ""
-
-    do {
-        $choice = "$(Read-Host '  Choose 0-2 and press Enter')".Trim()
-        if ($choice -notin '0', '1', '2') { Say "  Please type 1, 2 or 0." 'Red' }
-    } until ($choice -in '0', '1', '2')
+    $Settings = Import-Settings
+    while ($true) {
+        Say ""
+        Say "  =============================================" 'Cyan'
+        Say "        ZIPPER" 'Cyan'
+        Say "  =============================================" 'Cyan'
+        Say ""
+        Say "    1  -  Zip" 'White'
+        Say "    2  -  Unzip" 'White'
+        Say "    3  -  Settings" 'White'
+        Say "    0  -  Quit" 'White'
+        Say ""
+        $choice = "$(Read-Host '  Choose 0-3 and press Enter')".Trim()
+        if ($choice -eq '3') { Show-Settings; Clear-Host; continue }
+        if ($choice -in '0', '1', '2') { break }
+        Say "  Please type 1, 2, 3 or 0." 'Red'
+    }
 
     if ($choice -ne '0') {
         $SevenZip = Get-SevenZip
