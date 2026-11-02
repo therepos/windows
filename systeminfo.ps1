@@ -29,7 +29,24 @@ $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference    = 'SilentlyContinue'
 
 $OutDir = $null
-$Stamp = Get-Date -Format 'yyyy-MM-dd_HHmm'
+$Stamp = Get-Date -Format 'yyyyMMdd-HHmm'
+
+# Model as one word for file names: spaces -> dashes, characters Windows forbids removed
+function ConvertTo-OneWord([string]$s) {
+    $s = ($s -replace '[\\/:*?"<>|]', '').Trim() -replace '\s+', '-'
+    if ($s) { $s } else { 'Unknown' }
+}
+
+function Get-LaptopModel {
+    $cs = Get-CimInstance Win32_ComputerSystem
+    $model = $cs.Model
+    # Lenovo reports a part code (e.g. 21CB0020US) as Model; the readable name is in Version
+    if ($cs.Manufacturer -match 'LENOVO') {
+        $friendly = (Get-CimInstance Win32_ComputerSystemProduct).Version
+        if ($friendly) { $model = $friendly }
+    }
+    ConvertTo-OneWord $model
+}
 
 function Say($msg, $color = 'Gray') { Write-Host $msg -ForegroundColor $color }
 
@@ -71,7 +88,7 @@ function Finish-Report {
 #  OPTION 1 - WINDOWS LAPTOP
 # =====================================================================
 function Get-LaptopReport {
-    $out = Join-Path $OutDir "laptop_$Stamp.txt"
+    $out = Join-Path $OutDir "Data System $(Get-LaptopModel) $Stamp.txt"
     Say ""
     Say "  Collecting laptop info. This takes about 1-2 minutes..." 'Cyan'
     Say ""
@@ -244,7 +261,7 @@ function Get-PhoneReport {
     if (-not (Ensure-Adb))    { return }
     if (-not (Wait-ForPhone)) { return }
 
-    $out = Join-Path $OutDir "phone_$Stamp.txt"
+    $out = Join-Path $OutDir "Data Phone $(ConvertTo-OneWord "$(adb shell getprop ro.product.model)") $Stamp.txt"
     Say ""
     Say "  Collecting phone info. Keep the phone plugged in and unlocked..." 'Cyan'
     Say ""
