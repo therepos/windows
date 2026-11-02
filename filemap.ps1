@@ -3,10 +3,10 @@
 # =============================================================================
 #  File Map:
 #   1 = List    every file (relative path, size, modified), sorted, one per line
-#               -> filemap yyyyMMdd-HHmm.txt
+#               -> filemap <PC> yyyyMMdd-HHmm.txt
 #               for comparing two machines (e.g. paste both lists into an AI)
 #   2 = Index   every file with clickable links to the file and its folder
-#               -> filemap yyyyMMdd-HHmm.csv (opens in Excel)
+#               -> filemap <PC> yyyyMMdd-HHmm.csv (opens in Excel)
 #               mapped drives are written as \\server\share paths so links
 #               work for anyone with access; over ~1 million files it splits
 #               into "part 2", "part 3", ...
@@ -147,7 +147,7 @@ function New-FileList {
     $lines.Sort([StringComparer]::OrdinalIgnoreCase)
     $files = $lines.Count - $empty
 
-    $out = Join-Path $OutDir "filemap $Stamp.txt"
+    $out = Join-Path $OutDir "filemap $env:COMPUTERNAME $Stamp.txt"
     $w = New-Writer $out
     try {
         $w.WriteLine("# File list of: $DisplayRoot")
@@ -202,7 +202,7 @@ function ConvertTo-LinkCell([string]$target, [string]$label) {
 }
 
 function New-FileIndex {
-    $base   = Join-Path $OutDir "filemap $Stamp"
+    $base   = Join-Path $OutDir "filemap $env:COMPUTERNAME $Stamp"
     $header = (('Name', 'Type', 'Folder', 'Size KB', 'Modified', 'Open file', 'Open folder', 'Full path') -join $Sep)
     $paths  = New-Object System.Collections.Generic.List[string]
     $state  = @{ W = $null; Rows = 0; Part = 0 }
@@ -299,7 +299,7 @@ $Target      = Read-TargetFolder
 $DisplayRoot = Get-DisplayRoot $Target
 $WalkRoot    = Get-WalkRoot $Target
 $OutDir      = Get-DownloadsFolder
-$OutPaths    = @(Join-Path $OutDir "filemap $Stamp.csv")
+$OutPaths    = @(Join-Path $OutDir "filemap $env:COMPUTERNAME $Stamp.csv")
 $Errors      = New-Object System.Collections.Generic.List[object]
 $Links       = New-Object System.Collections.Generic.List[string]
 $Clock       = [Diagnostics.Stopwatch]::StartNew()
