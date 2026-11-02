@@ -14,6 +14,22 @@
 #  Output: Downloads. Hidden and system files are included; folders that
 #  cannot be opened are listed at the end. Read-only: nothing is changed,
 #  no admin, no downloads.
+#
+#  If GitHub is blocked on the PC:
+#   - Copy this whole file into Notepad, Save as type "All files", name it
+#     filemap.ps1. In PowerShell, in that folder, run:
+#       powershell -ExecutionPolicy Bypass -File .\filemap.ps1
+#     (no admin; the bypass lasts for this one run only)
+#   - If that is blocked too: open PowerShell ISE, paste into a new tab, press F5.
+#   - Do not paste it into a normal PowerShell window: the lines after the
+#     menu get eaten as answers to its prompts.
+#
+#  No PowerShell at all? Plain list from Command Prompt (cmd), into Downloads:
+#     chcp 65001
+#     dir "C:\Some Folder" /s /b /a-d > "%USERPROFILE%\Downloads\filelist.txt"
+#   /s = include subfolders, /b = full paths only, /a-d = all files incl. hidden.
+#   Drop /b to also get sizes and dates (grouped per folder, harder to compare).
+#   chcp 65001 keeps non-English file names readable.
 # =============================================================================
 
 $ErrorActionPreference = 'Continue'
