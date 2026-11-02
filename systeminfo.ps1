@@ -17,7 +17,7 @@ $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
            ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $IsAdmin) {
     Write-Host "  Requesting administrator rights..." -ForegroundColor Yellow
-    $cmd = "[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; irm '$ScriptUrl?$(Get-Random)' | iex"
+    $cmd = "[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; irm '${ScriptUrl}?$(Get-Random)' | iex"
     Start-Process -FilePath 'powershell.exe' -Verb RunAs `
         -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit', '-Command', $cmd
     Write-Host "  Continue in the new (elevated) window. You can close this one." -ForegroundColor Gray
