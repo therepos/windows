@@ -157,7 +157,7 @@ function Get-OutputDir {
 function Set-PasswordSetting {
     Say ""
     while ($true) {
-        $s = Read-Host '  New password (Enter = back to default)' -AsSecureString
+        $s = Read-Host '  New password (blank = default)' -AsSecureString
         if ($s.Length -eq 0) { $Settings.Password = $null; Say "  Password: default" 'Green'; return }
         $c = Read-Host '  Confirm password' -AsSecureString
         if ((ConvertFrom-Secure $c) -ceq (ConvertFrom-Secure $s)) {
@@ -172,7 +172,7 @@ function Set-PasswordSetting {
 function Set-OutDirSetting {
     Say ""
     while ($true) {
-        $answer = Read-Host "  Save to folder (Enter = Downloads)"
+        $answer = Read-Host "  Save to folder (blank = Downloads)"
         if ([string]::IsNullOrWhiteSpace($answer)) { $Settings.OutDir = $null; Say "  Save to: Downloads" 'Green'; return }
         $path = [Environment]::ExpandEnvironmentVariables($answer.Trim().Trim('"').Trim("'"))
         New-Item -ItemType Directory -Path $path -Force -ErrorAction SilentlyContinue | Out-Null
@@ -188,7 +188,7 @@ function Set-OutDirSetting {
 function Set-SplitSetting {
     Say ""
     while ($true) {
-        $answer = "$(Read-Host "  Split into parts of how many MB? (0 = never split, Enter = $DefaultSplitMB)")".Trim()
+        $answer = "$(Read-Host "  Split into parts of how many MB? (0 = never split, blank = $DefaultSplitMB)")".Trim()
         if (-not $answer) { $answer = "$DefaultSplitMB" }
         $mb = 0
         if ([int]::TryParse($answer, [ref]$mb) -and $mb -ge 0) {
@@ -213,7 +213,7 @@ function Show-Settings {
         Say "    3  -  Set split size        [$split]" 'White'
         Say "    0  -  Back" 'White'
         Say ""
-        $c = "$(Read-Host '  Choose 0-3 and press Enter')".Trim()
+        $c = "$(Read-Host '  Choose 0-3')".Trim()
         switch ($c) {
             '1' { Set-PasswordSetting; Export-Settings }
             '2' { Set-OutDirSetting;   Export-Settings }
@@ -237,8 +237,7 @@ function Split-Dropped([string]$line) {
 function Read-DroppedPaths([string]$What, [scriptblock]$Resolve) {
     $items = New-Object System.Collections.Generic.List[string]
     Say ""
-    Say "  Drop $What into this window (or type the path), then press Enter." 'Cyan'
-    Say "  Press Enter on an empty line when done." 'DarkGray'
+    Say "  Drop $What here (one or many):" 'Cyan'
     while ($true) {
         Write-Host '  > ' -NoNewline
         $line = [Console]::ReadLine()
@@ -343,7 +342,7 @@ function Test-SplitSet([string]$first) {
 }
 
 function Invoke-Unzip {
-    $archives = Read-DroppedPaths 'archives (any part of a split set is fine)' { param($raw) Resolve-Archive $raw }
+    $archives = Read-DroppedPaths 'archives' { param($raw) Resolve-Archive $raw }
     $password = Get-Password
     $outDir   = Get-OutputDir
     Say ""
@@ -364,7 +363,7 @@ function Invoke-Unzip {
             $r = Invoke-SevenZip @('x', "-p$password", '-y', "-o$dest", $arc)
             if ($r.Code -eq 0) { $ok++; Say "    done -> $dest" 'Green'; break }
             if ($r.Error -notmatch 'password' -or $attempt -eq 4) { Say "  SKIPPED $stem - $($r.Error)" 'Red'; break }
-            $s = Read-Host "  Wrong password, try again ($attempt/3, Enter = skip)" -AsSecureString
+            $s = Read-Host "  Wrong password, try again ($attempt/3, blank = skip)" -AsSecureString
             if ($s.Length -eq 0) { Say "  SKIPPED $stem" 'Red'; break }
             $password = ConvertFrom-Secure $s
         }
@@ -466,7 +465,7 @@ try {
         Say "    3  -  Settings" 'White'
         Say "    0  -  Quit" 'White'
         Say ""
-        $choice = "$(Read-Host '  Choose 0-3 and press Enter')".Trim()
+        $choice = "$(Read-Host '  Choose 0-3')".Trim()
         if ($choice -eq '3') { Show-Settings; Clear-Host; continue }
         if ($choice -in '0', '1', '2') { break }
         Say "  Please type 1, 2, 3 or 0." 'Red'
@@ -478,7 +477,6 @@ try {
             if ($choice -eq '1') { Invoke-Zip } else { Invoke-Unzip }
         }
         Say ""
-        Read-Host "  Press Enter to exit" | Out-Null
     }
 } finally {
     Reset-WindowLayout $Console
