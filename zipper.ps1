@@ -8,12 +8,11 @@
 #   3 = Settings  password, save-to folder, split size (kept between runs;
 #                 password stored encrypted for this Windows user)
 #   0 = Quit
-#  Defaults: password Zip@2026!, Downloads, split at 500 MB.
+#  Password: asked once on first use, then saved. Defaults: Downloads, split at 500 MB.
 #  Uses an installed 7-Zip, otherwise downloads the standalone 7za.exe
 #  into %LOCALAPPDATA%\zipper (no admin needed).
 # =============================================================================
 
-$DefaultPassword = 'Zip@2026!'
 $DefaultSplitMB  = 500
 $ToolDir         = Join-Path $env:LOCALAPPDATA 'zipper'
 $ExtraUrl        = 'https://www.7-zip.org/a/7z2409-extra.7z'
@@ -139,11 +138,24 @@ function Export-Settings {
 }
 
 # Saved password is DPAPI-encrypted: only this Windows user on this PC can read it
-function Get-Password {
+function Get-Password([switch]$Confirm) {
     if ($Settings.Password) {
         try { return ConvertFrom-Secure ($Settings.Password | ConvertTo-SecureString) } catch {}
     }
-    return $DefaultPassword
+    # First use: ask once, save it (encrypted) for next time
+    Say ""
+    Say "  Your zip password is needed once. It will be remembered." 'Cyan'
+    while ($true) {
+        $s = Read-Host '  Zip password' -AsSecureString
+        if ($s.Length -eq 0) { continue }
+        if ($Confirm -and (ConvertFrom-Secure (Read-Host '  Confirm password' -AsSecureString)) -cne (ConvertFrom-Secure $s)) {
+            Say "  Passwords differ, try again." 'Red'
+            continue
+        }
+        $Settings.Password = $s | ConvertFrom-SecureString
+        Export-Settings
+        return (ConvertFrom-Secure $s)
+    }
 }
 
 function Get-OutputDir {
@@ -157,8 +169,8 @@ function Get-OutputDir {
 function Set-PasswordSetting {
     Say ""
     while ($true) {
-        $s = Read-Host '  New password (blank = default)' -AsSecureString
-        if ($s.Length -eq 0) { $Settings.Password = $null; Say "  Password: default" 'Green'; return }
+        $s = Read-Host '  New password (blank = keep current)' -AsSecureString
+        if ($s.Length -eq 0) { Say "  Password unchanged." 'Gray'; return }
         $c = Read-Host '  Confirm password' -AsSecureString
         if ((ConvertFrom-Secure $c) -ceq (ConvertFrom-Secure $s)) {
             $Settings.Password = $s | ConvertFrom-SecureString
@@ -202,7 +214,7 @@ function Set-SplitSetting {
 
 function Show-Settings {
     while ($true) {
-        $pw    = if ($Settings.Password) { 'custom' } else { 'default' }
+        $pw    = if ($Settings.Password) { 'saved' } else { 'not set' }
         $out   = if ($Settings.OutDir) { $Settings.OutDir } else { "Downloads" }
         $split = if ($Settings.SplitMB -gt 0) { "$($Settings.SplitMB) MB" } else { 'never' }
         Say ""
@@ -262,7 +274,7 @@ function Invoke-Zip {
         $p = [Environment]::ExpandEnvironmentVariables($raw)
         if (Test-Path -LiteralPath $p) { (Resolve-Path -LiteralPath $p).ProviderPath }
     }
-    $password = Get-Password
+    $password = Get-Password -Confirm
     $outDir   = Get-OutputDir
     $SplitMB  = $Settings.SplitMB
 
