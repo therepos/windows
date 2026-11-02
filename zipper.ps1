@@ -6,7 +6,8 @@
 #                 over the split size -> YYYYMMDD-HHMMSS.001, .002, ...
 #   2 = Unzip     archive or any part of a split set -> <name>-extracted
 #   3 = Settings  password, save-to folder, split size (kept between runs;
-#                 password stored encrypted for this Windows user)
+#                 password stored encrypted for this Windows user), and the
+#                 'zipper' shortcut, which runs a local copy in %LOCALAPPDATA%\zipper
 #   0 = Quit
 #  Password: asked once on first use, then saved. Defaults: Downloads, split at 500 MB.
 #  Uses an installed 7-Zip, otherwise downloads the standalone 7za.exe
@@ -212,26 +213,43 @@ function Set-SplitSetting {
     }
 }
 
-# Optional one-word shortcut: typing `zipper` in any new PowerShell window runs this script
-$ShortcutLine = 'function zipper { irm https://github.com/therepos/windows/raw/main/zipper.ps1 | iex }'
+# Optional one-word shortcut: typing `zipper` in any new PowerShell window runs a local copy
+# of this script saved in %LOCALAPPDATA%\zipper (nothing is fetched from the internet)
+$ScriptFile   = $PSCommandPath
+$LocalScript  = Join-Path $ToolDir 'zipper.ps1'
+$ShortcutLine = 'function zipper { & "$env:LOCALAPPDATA\zipper\zipper.ps1" }'
 
 function Test-Shortcut {
-    (Test-Path -LiteralPath $PROFILE) -and (@(Get-Content -LiteralPath $PROFILE -ErrorAction SilentlyContinue) -match '^function zipper ').Count -gt 0
+    (Test-Path -LiteralPath $PROFILE) -and (Test-Path -LiteralPath $LocalScript) -and
+        (@(Get-Content -LiteralPath $PROFILE -ErrorAction SilentlyContinue) -contains $ShortcutLine)
 }
 
 function Switch-Shortcut {
     try {
-        if (Test-Shortcut) {
+        $on = Test-Shortcut
+        # Remove any zipper shortcut, including the older one that downloaded the script each time
+        if (Test-Path -LiteralPath $PROFILE) {
             @(Get-Content -LiteralPath $PROFILE) | Where-Object { $_ -notmatch '^function zipper ' } | Set-Content -LiteralPath $PROFILE
-            Say "  Shortcut removed." 'Green'
-        } else {
-            if ((Get-ExecutionPolicy -Scope CurrentUser) -in 'Undefined', 'Restricted', 'AllSigned') {
-                Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
-            }
-            if (-not (Test-Path -LiteralPath $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
-            Add-Content -LiteralPath $PROFILE "`n$ShortcutLine"
-            Say "  Shortcut added. In a new PowerShell window, just type: zipper" 'Green'
         }
+        if ($on) {
+            Remove-Item -LiteralPath $LocalScript -Force -ErrorAction SilentlyContinue
+            Say "  Shortcut removed." 'Green'
+            return
+        }
+        New-Item -ItemType Directory -Path $ToolDir -Force | Out-Null
+        if ($ScriptFile -and (Test-Path -LiteralPath $ScriptFile)) {
+            if ($ScriptFile -ne $LocalScript) { Copy-Item -LiteralPath $ScriptFile -Destination $LocalScript -Force }
+        } else {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri 'https://github.com/therepos/windows/raw/main/zipper.ps1' -OutFile $LocalScript -UseBasicParsing
+        }
+        Unblock-File -LiteralPath $LocalScript -ErrorAction SilentlyContinue
+        if ((Get-ExecutionPolicy -Scope CurrentUser) -in 'Undefined', 'Restricted', 'AllSigned') {
+            Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
+        }
+        if (-not (Test-Path -LiteralPath $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
+        Add-Content -LiteralPath $PROFILE "`n$ShortcutLine"
+        Say "  Shortcut added. In a new PowerShell window, just type: zipper" 'Green'
     } catch {
         Say "  Could not change the shortcut: $($_.Exception.Message)" 'Red'
     }
