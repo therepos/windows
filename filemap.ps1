@@ -3,10 +3,10 @@
 # =============================================================================
 #  File Map:
 #   1 = List    every file (relative path, size, modified), sorted, one per line
-#               -> File List <Folder> <PC> yyyyMMdd-HHmm.txt
+#               -> filemap yyyyMMdd-HHmm.txt
 #               for comparing two machines (e.g. paste both lists into an AI)
 #   2 = Index   every file with clickable links to the file and its folder
-#               -> File Index <Folder> yyyyMMdd-HHmm.csv  (opens in Excel)
+#               -> filemap yyyyMMdd-HHmm.csv (opens in Excel)
 #               mapped drives are written as \\server\share paths so links
 #               work for anyone with access; over ~1 million files it splits
 #               into "part 2", "part 3", ...
@@ -28,12 +28,6 @@ function Format-Size([double]$bytes) {
     if ($bytes -ge 1GB) { return '{0:N1} GB' -f ($bytes / 1GB) }
     if ($bytes -ge 1MB) { return '{0:N0} MB' -f ($bytes / 1MB) }
     return '{0:N0} KB' -f [Math]::Ceiling($bytes / 1KB)
-}
-
-# Name as one word for file names: spaces -> dashes, characters Windows forbids removed
-function ConvertTo-OneWord([string]$s) {
-    $s = ($s -replace '[\\/:*?"<>|]', '').Trim() -replace '\s+', '-'
-    if ($s) { $s } else { 'Unknown' }
 }
 
 function Get-DownloadsFolder {
@@ -116,9 +110,8 @@ function Get-Relative([string]$full) {
     $full.Substring($WalkRoot.Length).TrimStart('\')
 }
 
-# Plain string splits (Split-Path treats [ ] as wildcards; .NET Path fails on long paths)
+# Plain string split (Split-Path treats [ ] as wildcards; .NET Path fails on long paths)
 function Get-Parent([string]$p) { $i = $p.LastIndexOf('\'); if ($i -lt 0) { '' } elseif ($i -eq 2 -and $p[1] -eq ':') { $p.Substring(0, 3) } else { $p.Substring(0, $i) } }
-function Get-Leaf([string]$p) { $p.Substring($p.LastIndexOf('\') + 1) }
 
 function Join-Display([string]$rel) { if ($rel) { "$DisplayRoot\$rel" } else { $DisplayRoot } }
 
@@ -154,7 +147,7 @@ function New-FileList {
     $lines.Sort([StringComparer]::OrdinalIgnoreCase)
     $files = $lines.Count - $empty
 
-    $out = Join-Path $OutDir "File List $FolderWord $(ConvertTo-OneWord $env:COMPUTERNAME) $Stamp.txt"
+    $out = Join-Path $OutDir "filemap $Stamp.txt"
     $w = New-Writer $out
     try {
         $w.WriteLine("# File list of: $DisplayRoot")
@@ -209,7 +202,7 @@ function ConvertTo-LinkCell([string]$target, [string]$label) {
 }
 
 function New-FileIndex {
-    $base   = Join-Path $OutDir "File Index $FolderWord $Stamp"
+    $base   = Join-Path $OutDir "filemap $Stamp"
     $header = (('Name', 'Type', 'Folder', 'Size KB', 'Modified', 'Open file', 'Open folder', 'Full path') -join $Sep)
     $paths  = New-Object System.Collections.Generic.List[string]
     $state  = @{ W = $null; Rows = 0; Part = 0 }
@@ -305,9 +298,8 @@ if ($choice -eq '0') { return }
 $Target      = Read-TargetFolder
 $DisplayRoot = Get-DisplayRoot $Target
 $WalkRoot    = Get-WalkRoot $Target
-$FolderWord  = ConvertTo-OneWord $(if (Get-Leaf $DisplayRoot) { Get-Leaf $DisplayRoot } else { $DisplayRoot })
 $OutDir      = Get-DownloadsFolder
-$OutPaths    = @(Join-Path $OutDir "File Index $FolderWord $Stamp.csv")
+$OutPaths    = @(Join-Path $OutDir "filemap $Stamp.csv")
 $Errors      = New-Object System.Collections.Generic.List[object]
 $Links       = New-Object System.Collections.Generic.List[string]
 $Clock       = [Diagnostics.Stopwatch]::StartNew()
