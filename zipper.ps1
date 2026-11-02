@@ -212,26 +212,54 @@ function Set-SplitSetting {
     }
 }
 
+# Optional one-word shortcut: typing `zipper` in any new PowerShell window runs this script
+$ShortcutLine = 'function zipper { irm https://github.com/therepos/windows/raw/main/zipper.ps1 | iex }'
+
+function Test-Shortcut {
+    (Test-Path -LiteralPath $PROFILE) -and (@(Get-Content -LiteralPath $PROFILE -ErrorAction SilentlyContinue) -match '^function zipper ').Count -gt 0
+}
+
+function Switch-Shortcut {
+    try {
+        if (Test-Shortcut) {
+            @(Get-Content -LiteralPath $PROFILE) | Where-Object { $_ -notmatch '^function zipper ' } | Set-Content -LiteralPath $PROFILE
+            Say "  Shortcut removed." 'Green'
+        } else {
+            if ((Get-ExecutionPolicy -Scope CurrentUser) -in 'Undefined', 'Restricted', 'AllSigned') {
+                Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
+            }
+            if (-not (Test-Path -LiteralPath $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
+            Add-Content -LiteralPath $PROFILE "`n$ShortcutLine"
+            Say "  Shortcut added. In a new PowerShell window, just type: zipper" 'Green'
+        }
+    } catch {
+        Say "  Could not change the shortcut: $($_.Exception.Message)" 'Red'
+    }
+}
+
 function Show-Settings {
     while ($true) {
         $pw    = if ($Settings.Password) { 'saved' } else { 'not set' }
         $out   = if ($Settings.OutDir) { $Settings.OutDir } else { "Downloads" }
         $split = if ($Settings.SplitMB -gt 0) { "$($Settings.SplitMB) MB" } else { 'never' }
+        $short = if (Test-Shortcut) { 'on' } else { 'off' }
         Say ""
         Say "  ---------------- SETTINGS -------------------" 'Cyan'
         Say ""
         Say "    1  -  Set password          [$pw]" 'White'
         Say "    2  -  Set output location   [$out]" 'White'
         Say "    3  -  Set split size        [$split]" 'White'
+        Say "    4  -  Shortcut 'zipper'     [$short]" 'White'
         Say "    0  -  Back" 'White'
         Say ""
-        $c = "$(Read-Host '  Choose 0-3')".Trim()
+        $c = "$(Read-Host '  Choose 0-4')".Trim()
         switch ($c) {
             '1' { Set-PasswordSetting; Export-Settings }
             '2' { Set-OutDirSetting;   Export-Settings }
             '3' { Set-SplitSetting;    Export-Settings }
+            '4' { Switch-Shortcut }
             '0' { return }
-            default { Say "  Please type 1, 2, 3 or 0." 'Red' }
+            default { Say "  Please type 1, 2, 3, 4 or 0." 'Red' }
         }
     }
 }
