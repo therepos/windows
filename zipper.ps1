@@ -288,7 +288,12 @@ function Invoke-Zip {
     }
     $split = $SplitMB -gt 0 -and $total -gt ($SplitMB * 1MB)
 
-    $base = Join-Path $outDir (Get-Date -Format 'yyyyMMdd-HHmmss')
+    # Unique name: 7-Zip would otherwise add to an archive made in the same second
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $base  = Join-Path $outDir $stamp
+    for ($n = 2; Get-ChildItem -LiteralPath $outDir -Filter "$(Split-Path $base -Leaf)*" -ErrorAction SilentlyContinue; $n++) {
+        $base = Join-Path $outDir "$stamp-$n"
+    }
     $args7z = @('a', '-t7z', "-p$password", '-mhe=on', '-mx=5')
     if ($split) { $args7z += "-v${SplitMB}m" }
     $args7z += "$base.7z"
