@@ -241,7 +241,7 @@ function Get-FileMap([string]$Root) {
 # "name|size" -> list of relative paths with that name and size. Only files that share
 # a name and size with another file can be the same file, so only those get read.
 function Get-NameSizeIndex($map) {
-    $ix = [System.Collections.Generic.Dictionary[string,object]]::new([StringComparer]::OrdinalIgnoreCase)
+    $ix = @{}                                   # hashtable keys are case-insensitive
     foreach ($rel in $map.Keys) {
         $f = $map[$rel]
         $k = "$($f.Name)|$($f.Length)"
@@ -281,7 +281,7 @@ function Read-Contents($files, $errors) {
 # Key per file: the content key when read, "name|size" when nothing on the other side
 # could match it, $null when it could not be read (then it is left out of every action)
 function Get-Keys($map, $hashes) {
-    $keys = [System.Collections.Generic.Dictionary[string,object]]::new([StringComparer]::OrdinalIgnoreCase)
+    $keys = @{}
     foreach ($rel in $map.Keys) {
         $f = $map[$rel]
         if ($hashes.ContainsKey($f.FullName)) { $keys[$rel] = $hashes[$f.FullName] }
@@ -770,7 +770,7 @@ while ($true) {
             '8' { if (@(Show-Duplicates) -contains 'quit') { $quit = $true } }
         }
     } catch {
-        Say "  FAILED: $($_.Exception.Message)" 'Red'
+        Say "  FAILED: $($_.Exception.Message)  (line $($_.InvocationInfo.ScriptLineNumber))" 'Red'
     }
     if ($quit) { break }
     $last = $choice
