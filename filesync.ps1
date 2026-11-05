@@ -27,7 +27,8 @@
 #  and asking. Network and mapped drives have no Recycle Bin, so there it warns
 #  that the delete is permanent and asks you to type yes.
 #  OneDrive / SharePoint folders work too; online-only files are downloaded when
-#  read or copied. Local, network and mapped drives are fine.
+#  read or copied. Local, network and mapped drives are fine, and so are paths
+#  longer than 260 characters.
 #  One keypress picks an option (no Enter). After each action the menu comes
 #  back with the last action as the default, so Enter repeats it. Before a copy,
 #  replace or delete the first 10 files are shown; v on the y/n/v prompt shows all.
@@ -251,16 +252,77 @@ function Get-NameSizeIndex($map) {
     $ix
 }
 
+
+# =====================================================================
+#  LONG PATHS  (over 260 characters: Windows PowerShell can list them but not open them)
+# =====================================================================
+# A few Windows calls with the \\?\ prefix, which has no length limit. Compiled once per run.
+$LongPathCode = @'
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+public static class LongPath {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr sa, uint disposition, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool CopyFileW(string src, string dst, bool failIfExists);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool CreateDirectoryW(string path, IntPtr sa);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern uint GetFileAttributesW(string path);
+    static string P(string path) {
+        if (path.StartsWith(@"\\?\")) return path;
+        if (path.StartsWith(@"\\")) return @"\\?\UNC\" + path.Substring(2);
+        return @"\\?\" + path;
+    }
+    static Exception Err() { return new IOException(new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()).Message); }
+    public static FileStream OpenRead(string path) {
+        SafeFileHandle h = CreateFileW(P(path), 0x80000000u, 7u, IntPtr.Zero, 3u, 0x08000080u, IntPtr.Zero);
+        if (h.IsInvalid) throw Err();
+        return new FileStream(h, FileAccess.Read, 1 << 20);
+    }
+    public static bool FileExists(string path) { uint a = GetFileAttributesW(P(path)); return a != 0xFFFFFFFFu && (a & 0x10u) == 0; }
+    public static bool DirExists(string path)  { uint a = GetFileAttributesW(P(path)); return a != 0xFFFFFFFFu && (a & 0x10u) != 0; }
+    public static void Copy(string src, string dst, bool overwrite) { if (!CopyFileW(P(src), P(dst), !overwrite)) throw Err(); }
+    public static void CreateDirectory(string path) {
+        path = path.TrimEnd('\\');
+        if (path.Length <= 3 || DirExists(path)) return;
+        int i = path.LastIndexOf('\\');
+        if (i > 0) CreateDirectory(path.Substring(0, i));
+        if (!CreateDirectoryW(P(path), IntPtr.Zero) && !DirExists(path)) throw Err();
+    }
+}
+'@
+$LongPaths = $false
+try { Add-Type -TypeDefinition $LongPathCode -ErrorAction Stop; $LongPaths = $true } catch {}
+
+function Open-FileRead([string]$path) {
+    if ($LongPaths) { [LongPath]::OpenRead($path) } else { [IO.File]::OpenRead($path) }
+}
+function Test-File([string]$path) {
+    if ($LongPaths) { [LongPath]::FileExists($path) } else { [IO.File]::Exists($path) }
+}
+function New-Folder([string]$path) {
+    if ($LongPaths) { [LongPath]::CreateDirectory($path) } else { [IO.Directory]::CreateDirectory($path) | Out-Null }
+}
+function Copy-File([string]$src, [string]$dst, [bool]$overwrite) {
+    if ($LongPaths) { [LongPath]::Copy($src, $dst, $overwrite) } else { [IO.File]::Copy($src, $dst, $overwrite) }
+}
+# Folder part of a path without the .NET length check
+function Get-ParentPath([string]$path) { $path.Substring(0, $path.LastIndexOf('\')) }
+
 $Sha256 = [System.Security.Cryptography.SHA256]::Create()
 
 # Content key "name|size|sha256" (lower case), or $null when the file cannot be read
 function Get-ContentKey($f, $errors) {
     try {
-        $s = [IO.File]::OpenRead($f.FullName)
+        $s = Open-FileRead $f.FullName
         try { $h = [BitConverter]::ToString($Sha256.ComputeHash($s)).Replace('-', '') } finally { $s.Dispose() }
         return "$($f.Name)|$($f.Length)|$h".ToLowerInvariant()
     } catch {
-        $errors.Add("$($f.FullName): $($_.Exception.Message)")
+        $msg = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message }
+        $errors.Add("$($f.FullName): $msg$(if ($f.FullName.Length -gt 259) { " (path is $($f.FullName.Length) characters long)" })")
         return $null
     }
 }
@@ -499,14 +561,15 @@ function Copy-Missing([string]$FromName, [string]$ToName, $Source, [string[]]$Mi
     foreach ($rel in $Missing) {
         $n++
         try {
-            $dst = [IO.Path]::Combine($to, $rel)
-            [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($dst)) | Out-Null
-            if ([IO.File]::Exists($dst)) { continue }        # appeared meanwhile: never replace
+            $dst = $to.TrimEnd('\') + '\' + $rel
+            New-Folder (Get-ParentPath $dst)
+            if (Test-File $dst) { continue }                 # appeared meanwhile: never replace
             Say "    [$n/$($Missing.Count)] $rel" 'DarkGray'
-            [IO.File]::Copy($Source[$rel].FullName, $dst, $false)
+            Copy-File $Source[$rel].FullName $dst $false
             $copied++
         } catch {
-            $failed.Add("${rel}: $($_.Exception.Message)")
+            $msg = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message }
+            $failed.Add("${rel}: $msg")
         }
     }
     Say "  DONE - $copied of $($Missing.Count) copied into Folder $ToName" $(if ($failed.Count) { 'Yellow' } else { 'Green' })
@@ -575,10 +638,11 @@ function Invoke-Update([bool]$AtoB, [bool]$BtoA, $c = $null) {
             $src = $(if ($d.Newer -eq 'A') { $c.A.Map } else { $c.B.Map })[$d.Path].FullName
             $dst = $(if ($d.Newer -eq 'A') { $c.B.Map } else { $c.A.Map })[$d.Path].FullName
             Say "    [$n/$($todo.Count)] $($d.Path)  ($($d.Newer) -> $(if ($d.Newer -eq 'A') { 'B' } else { 'A' }))" 'DarkGray'
-            [IO.File]::Copy($src, $dst, $true)
+            Copy-File $src $dst $true
             $done++
         } catch {
-            $failed.Add("$($d.Path): $($_.Exception.Message)")
+            $msg = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message }
+            $failed.Add("$($d.Path): $msg")
         }
     }
     Say "  DONE - $done of $($todo.Count) updated" $(if ($failed.Count) { 'Yellow' } else { 'Green' })
