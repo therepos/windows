@@ -8,8 +8,8 @@
 #   4 = Both      copy both ways so A and B end up with the same files
 #   5 = Update    files on both sides that differ: replace the older copy
 #                 with the newer one (same date but different size: left alone)
-#   6 = Settings  Folder A, Folder B (kept between runs) and the 'filesync'
-#                 shortcut, which runs a local copy in %LOCALAPPDATA%\filesync
+#   6 = Settings  change Folder A or Folder B, and the 'filesync' shortcut,
+#                 which runs a local copy in %LOCALAPPDATA%\filesync
 #   0 = Quit      closes this window
 #  Files match by relative path and name. Nothing is ever deleted. Options 2-4
 #  never replace a file; only Update does, and only an older copy with a newer
@@ -18,11 +18,11 @@
 #  when copied. Local, network and mapped drives are fine.
 #  One keypress picks an option (no Enter). After each action the menu comes
 #  back with the last action as the default, so Enter repeats it.
-#  Folders are asked on first use, then remembered. No admin, no downloads.
+#  Folders are asked each run and not saved (fine on a shared PC); they are
+#  kept only while this window is open. No admin, no downloads.
 # =============================================================================
 
 $ToolDir      = Join-Path $env:LOCALAPPDATA 'filesync'
-$SettingsFile = Join-Path $ToolDir 'settings.json'
 $ScriptUrl    = 'https://github.com/therepos/windows/raw/main/filesync.ps1'
 $MaxListed    = 40                      # lines shown per list before "... and N more"
 
@@ -88,22 +88,9 @@ function Test-Overlap([string]$a, [string]$b) {
 }
 
 # =====================================================================
-#  SETTINGS  (%LOCALAPPDATA%\filesync\settings.json)
+#  FOLDERS  (asked on first use in each run; nothing is saved to disk)
 # =====================================================================
-function Import-Settings {
-    $s = [pscustomobject]@{ FolderA = $null; FolderB = $null }
-    try {
-        $saved = Get-Content -LiteralPath $SettingsFile -Raw -ErrorAction Stop | ConvertFrom-Json
-        if ($saved.FolderA) { $s.FolderA = [string]$saved.FolderA }
-        if ($saved.FolderB) { $s.FolderB = [string]$saved.FolderB }
-    } catch {}
-    return $s
-}
-
-function Export-Settings {
-    New-Item -ItemType Directory -Path $ToolDir -Force | Out-Null
-    $Settings | ConvertTo-Json | Set-Content -LiteralPath $SettingsFile -Encoding UTF8
-}
+$Settings = [pscustomobject]@{ FolderA = $null; FolderB = $null }
 
 function Set-FolderSetting([string]$Which) {
     $current = $Settings."Folder$Which"
@@ -135,7 +122,6 @@ function Confirm-Folders {
         if ($cur -and (Test-PathQuiet $cur 'Container')) { continue }
         if ($cur) { Say "  Folder $w is not available right now: $cur" 'Yellow' }
         Set-FolderSetting $w
-        Export-Settings
     }
 }
 
@@ -195,8 +181,8 @@ function Show-Settings {
         Say "    0  -  Quit" 'White'
         Say ""
         switch (Read-MenuKey 'Choose 0-4' '01234') {
-            '1' { Set-FolderSetting 'A'; Export-Settings }
-            '2' { Set-FolderSetting 'B'; Export-Settings }
+            '1' { Set-FolderSetting 'A' }
+            '2' { Set-FolderSetting 'B' }
             '3' { Switch-Shortcut }
             '4' { return 'back' }
             '0' { return 'quit' }
@@ -374,8 +360,7 @@ function Invoke-Update {
 #  MENU
 # =====================================================================
 Clear-Host
-$Settings = Import-Settings
-$last     = ''
+$last = ''
 while ($true) {
     $a = if ($Settings.FolderA) { $Settings.FolderA } else { 'not set' }
     $b = if ($Settings.FolderB) { $Settings.FolderB } else { 'not set' }
