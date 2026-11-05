@@ -8,13 +8,14 @@
 #   4 = Both      copy both ways so A and B end up with the same files
 #   5 = Update A -> B   files that differ and are newer in A: replace B's copy
 #   6 = Update B -> A   files that differ and are newer in B: replace A's copy
-#   7 = Update both     replace every older copy with the newer one
+#   7 = Sync      copy missing files both ways, then replace every older copy
+#                 with the newer one, so A and B end up the same
 #                 (same date but different size: always left alone)
 #   8 = Settings  change Folder A or Folder B, and the 'filesync' shortcut,
 #                 which runs a local copy in %LOCALAPPDATA%\filesync
 #   0 = Quit      closes this window
 #  Files match by relative path and name. Nothing is ever deleted. Options 2-4
-#  never replace a file; only Update (5-7) does, and only an older copy with a newer
+#  never replace a file; only Update (5-6) and Sync (7) do, and only an older copy with a newer
 #  one, after showing the list and asking.
 #  OneDrive / SharePoint folders work too; online-only files are downloaded
 #  when copied. Local, network and mapped drives are fine.
@@ -281,7 +282,7 @@ function Invoke-Compare {
     Show-Errors $c.Errors
     Say ""
     if (-not $c.MissingA.Count -and -not $c.MissingB.Count -and -not $c.Different.Count) { Say "  DONE - A and B have the same files." 'Green' }
-    else { Say "  DONE - 2, 3 or 4 copies the missing files; 5, 6 or 7 replaces older copies with newer ones." 'Green' }
+    else { Say "  DONE - 2, 3 or 4 copies the missing files; 5 or 6 replaces older copies with newer ones; 7 does both." 'Green' }
 }
 
 # =====================================================================
@@ -337,9 +338,11 @@ function Invoke-Sync([bool]$AtoB, [bool]$BtoA) {
 #  UPDATE: replace the older of two differing copies with the newer one
 # =====================================================================
 # $AtoB: replace B's copy where A is newer; $BtoA: replace A's copy where B is newer
-function Invoke-Update([bool]$AtoB, [bool]$BtoA) {
-    $c = Get-Comparison
-    if (-not (Confirm-Scan $c)) { return }
+function Invoke-Update([bool]$AtoB, [bool]$BtoA, $c = $null) {
+    if (-not $c) {
+        $c = Get-Comparison
+        if (-not (Confirm-Scan $c)) { return }
+    }
     $todo = @($c.Different | Where-Object { ($AtoB -and $_.Newer -eq 'A') -or ($BtoA -and $_.Newer -eq 'B') })
     $tied = @($c.Different | Where-Object { -not $_.Newer })
     $other = @($c.Different | Where-Object { (-not $AtoB -and $_.Newer -eq 'A') -or (-not $BtoA -and $_.Newer -eq 'B') })
@@ -376,6 +379,17 @@ function Invoke-Update([bool]$AtoB, [bool]$BtoA) {
     Show-Errors $failed
 }
 
+# Sync: copy the missing files both ways, then replace older copies with newer ones.
+# One scan is enough: copying only adds files that were missing, so the list of
+# files in both but different is still right.
+function Invoke-FullSync {
+    $c = Get-Comparison
+    if (-not (Confirm-Scan $c)) { return }
+    Copy-Missing 'A' 'B' $c.A.Map $c.MissingB
+    Copy-Missing 'B' 'A' $c.B.Map $c.MissingA
+    Invoke-Update $true $true $c
+}
+
 # =====================================================================
 #  MENU
 # =====================================================================
@@ -397,7 +411,7 @@ while ($true) {
     Say "    4  -  Copy both ways" 'White'
     Say "    5  -  Update A -> B" 'White'
     Say "    6  -  Update B -> A" 'White'
-    Say "    7  -  Update both ways" 'White'
+    Say "    7  -  Sync" 'White'
     Say "    8  -  Settings" 'White'
     Say "    0  -  Quit" 'White'
     Say ""
@@ -417,7 +431,7 @@ while ($true) {
             '4' { Invoke-Sync $true  $true }
             '5' { Invoke-Update $true  $false }
             '6' { Invoke-Update $false $true }
-            '7' { Invoke-Update $true  $true }
+            '7' { Invoke-FullSync }
         }
     } catch {
         Say "  FAILED: $($_.Exception.Message)" 'Red'
