@@ -353,6 +353,11 @@ function Invoke-Update([bool]$AtoB, [bool]$BtoA) {
         Say "  $($other.Count) file(s) newer in $side left alone (use $(if ($AtoB) { '6' } else { '5' }) or 7 for those)." 'Yellow'
         Say ""
     }
+    if ($other.Count) {
+        $side = if ($AtoB) { 'B' } else { 'A' }
+        Say "  $($other.Count) file(s) newer in $side left alone (use $(if ($AtoB) { '6' } else { '5' }) or 7 for those)." 'Yellow'
+        Say ""
+    }
     if (-not $todo.Count) { Say "  Nothing to update." 'Green'; return }
     Show-Different 'OLDER COPIES TO REPLACE WITH THE NEWER VERSION' $todo
     Say ""
