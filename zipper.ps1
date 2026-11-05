@@ -8,7 +8,9 @@
 #   3 = Settings  password, save-to folder, split size (kept between runs;
 #                 password stored encrypted for this Windows user), and the
 #                 'zipper' shortcut, which runs a local copy in %LOCALAPPDATA%\zipper
-#   0 = Quit
+#   0 = Quit      closes this window
+#  One keypress picks an option (no Enter). After zipping or unzipping the menu comes
+#  back with the last action as the default, so Enter repeats it.
 #  Password: asked once on first use, then saved. Defaults: Downloads, split at 500 MB.
 #  Uses an installed 7-Zip, otherwise downloads the standalone 7za.exe
 #  into %LOCALAPPDATA%\zipper (no admin needed).
@@ -109,6 +111,35 @@ function Get-DownloadsFolder {
         if (Test-Path -LiteralPath $path) { return $path }
     }
     return (Join-Path $env:USERPROFILE 'Downloads')
+}
+
+# Test-Path that never prints an error, e.g. for text that is not one path ("a" "b")
+function Test-PathQuiet([string]$path, [string]$type = 'Any') {
+    if (-not $path) { return $false }
+    try { Test-Path -LiteralPath $path -PathType $type -ErrorAction Stop } catch { $false }
+}
+
+# One keypress picks a menu option (no Enter needed); Enter picks the default, if any
+function Read-MenuKey([string]$Prompt, [string]$Valid, [string]$Default = '') {
+    Write-Host "  $Prompt$(if ($Default) { " [$Default]" }): " -NoNewline
+    while ($true) {
+        try {
+            $k = [Console]::ReadKey($true)
+            $c = if ($k.Key -eq 'Enter') { $Default } else { "$($k.KeyChar)" }
+        } catch {
+            # No keyboard (input redirected): fall back to a typed line
+            $line = [Console]::ReadLine()
+            if ($null -eq $line) { throw 'No keyboard input available' }
+            $c = $line.Trim(); if (-not $c) { $c = $Default }
+        }
+        if ($c.Length -eq 1 -and $Valid.Contains($c)) {
+            Write-Host $c
+            # Swallow an Enter typed out of habit so it does not reach the next prompt
+            Start-Sleep -Milliseconds 300
+            try { while ([Console]::KeyAvailable) { [void][Console]::ReadKey($true) } } catch {}
+            return $c
+        }
+    }
 }
 
 function ConvertFrom-Secure($secure) {
@@ -268,16 +299,16 @@ function Show-Settings {
         Say "    2  -  Set output location   [$out]" 'White'
         Say "    3  -  Set split size        [$split]" 'White'
         Say "    4  -  Shortcut 'zipper'     [$short]" 'White'
-        Say "    0  -  Back" 'White'
+        Say "    5  -  Back" 'White'
+        Say "    0  -  Quit" 'White'
         Say ""
-        $c = "$(Read-Host '  Choose 0-4')".Trim()
-        switch ($c) {
+        switch (Read-MenuKey 'Choose 0-5' '012345') {
             '1' { Set-PasswordSetting; Export-Settings }
             '2' { Set-OutDirSetting;   Export-Settings }
             '3' { Set-SplitSetting;    Export-Settings }
             '4' { Switch-Shortcut }
-            '0' { return }
-            default { Say "  Please type 1, 2, 3, 4 or 0." 'Red' }
+            '5' { return 'back' }
+            '0' { return 'quit' }
         }
     }
 }
@@ -286,7 +317,7 @@ function Show-Settings {
 function Split-Dropped([string]$line) {
     $line = $line.Trim()
     $whole = $line.Trim('"').Trim("'")
-    if ($whole -and (Test-Path -LiteralPath $whole)) { return , $whole }
+    if ($whole -notmatch '["'']' -and (Test-PathQuiet $whole)) { return , $whole }
     [regex]::Matches($line, '"([^"]+)"|''([^'']+)''|(\S+)') | ForEach-Object {
         $_.Groups[1].Value + $_.Groups[2].Value + $_.Groups[3].Value
     }
@@ -295,7 +326,7 @@ function Split-Dropped([string]$line) {
 function Read-DroppedPaths([string]$What, [scriptblock]$Resolve) {
     $items = New-Object System.Collections.Generic.List[string]
     Say ""
-    Say "  Drop $What here (one or many):" 'Cyan'
+    Say "  Drop $What here (one or many, then a blank line):" 'Cyan'
     while ($true) {
         Write-Host '  > ' -NoNewline
         $line = [Console]::ReadLine()
@@ -318,7 +349,7 @@ function Invoke-Zip {
     $targets = Read-DroppedPaths 'files or folders' {
         param($raw)
         $p = [Environment]::ExpandEnvironmentVariables($raw)
-        if (Test-Path -LiteralPath $p) { (Resolve-Path -LiteralPath $p).ProviderPath }
+        if (Test-PathQuiet $p) { (Resolve-Path -LiteralPath $p).ProviderPath }
     }
     $password = Get-Password -Confirm
     $outDir   = Get-OutputDir
@@ -382,9 +413,9 @@ function Invoke-Zip {
 function Resolve-Archive([string]$raw) {
     $p = [Environment]::ExpandEnvironmentVariables($raw)
     foreach ($c in $p, "$p.7z", "$p.001") {
-        if (Test-Path -LiteralPath $c -PathType Leaf) { $p = (Resolve-Path -LiteralPath $c).ProviderPath; break }
+        if (Test-PathQuiet $c 'Leaf') { $p = (Resolve-Path -LiteralPath $c).ProviderPath; break }
     }
-    if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { return $null }
+    if (-not (Test-PathQuiet $p 'Leaf')) { return $null }
     if ($p -match '^(.*)\.(\d{3})$') { return "$($Matches[1]).001" }
     return $p
 }
@@ -514,7 +545,9 @@ function Reset-WindowLayout($console) {
 #  MENU
 # =====================================================================
 Clear-Host
-$Console = Set-WindowLayout
+$Console  = Set-WindowLayout
+$SevenZip = $null
+$last     = ''
 try {
     $Settings = Import-Settings
     while ($true) {
@@ -528,19 +561,22 @@ try {
         Say "    3  -  Settings" 'White'
         Say "    0  -  Quit" 'White'
         Say ""
-        $choice = "$(Read-Host '  Choose 0-3')".Trim()
-        if ($choice -eq '3') { Show-Settings; Clear-Host; continue }
-        if ($choice -in '0', '1', '2') { break }
-        Say "  Please type 1, 2, 3 or 0." 'Red'
-    }
-
-    if ($choice -ne '0') {
-        $SevenZip = Get-SevenZip
+        $choice = Read-MenuKey 'Choose 0-3' '0123' $last
+        if ($choice -eq '0') { break }
+        if ($choice -eq '3') {
+            if (@(Show-Settings) -contains 'quit') { break }
+            Clear-Host
+            continue
+        }
+        if (-not $SevenZip) { $SevenZip = Get-SevenZip }
         if ($SevenZip) {
             if ($choice -eq '1') { Invoke-Zip } else { Invoke-Unzip }
         }
+        $last = $choice
         Say ""
     }
 } finally {
     Reset-WindowLayout $Console
 }
+# Quit closes this window, not just the menu (errors above skip this and leave it open)
+[Environment]::Exit(0)

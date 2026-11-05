@@ -23,12 +23,17 @@ One-click Windows scripts for a non-technical user. Scripts are run straight fro
 
 - `Clear-Host`, a cyan `====` banner with the tool name in caps, then numbered options:
   `    1  -  Zip`. Short labels, no descriptions. `0  -  Quit` is always last.
-- Prompt `Choose 0-N`. Never write "press Enter"; prompts with a default show it as
+- Prompt `Choose 0-N`; one keypress picks the option, no Enter (`Read-MenuKey` in
+  zipper.ps1). Never write "press Enter"; prompts with a default show it as
   `Folder [C:\Users\...\Downloads]` or `(blank = Downloads)`.
-- Run the chosen action once, then end. No loop back to the menu, no "press Enter to
-  exit" (only the elevated window may need a pause).
+- Tools that are used repeatedly (zipper) return to the menu after each action with the
+  last action as the default, shown as `Choose 0-N [1]`, so Enter repeats it. One-shot
+  tools (systeminfo) run the action once, then end. No "press Enter to exit" (only the
+  elevated window may need a pause).
+- `0  -  Quit` closes the window (`[Environment]::Exit(0)`), not just the menu.
 - Settings, when there are any, is its own submenu: `Set <thing>   [current value]`,
-  `0  -  Back`, saved between runs. Blank keeps the current value or restores the default.
+  `N  -  Back`, `0  -  Quit`, saved between runs. Blank keeps the current value or
+  restores the default.
 - Settings may offer `Shortcut '<name>'  [on/off]`, which adds or removes
   `function <name> { irm ... | iex }` in `$PROFILE` (setting CurrentUser execution
   policy to RemoteSigned if needed).
@@ -42,6 +47,8 @@ One-click Windows scripts for a non-technical user. Scripts are run straight fro
 
 - Scripts cannot be run here: say so, and list what the user should test on Windows.
 - Keep diffs small; check quoting (`ConvertTo-Arg` for 7-Zip arguments), `-LiteralPath`
-  for user paths, and that every prompt reads with `Read-Host` or `[Console]::ReadLine()`.
+  for user paths, that menus read one key with `[Console]::ReadKey` and every other
+  prompt with `Read-Host` or `[Console]::ReadLine()`, and that `Test-Path` on user text
+  cannot print an error (several quoted paths on one line are "illegal characters").
 - Never commit tokens, passwords, LAN IPs, serial numbers or MAC addresses.
 - Do not put model names in commits, comments or docs.
