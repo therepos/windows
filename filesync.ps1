@@ -268,7 +268,8 @@ function Get-ContentKey($f, $errors) {
 # Read the contents of the given files, with a one-line progress counter
 function Read-Contents($files, $errors) {
     $keys = @{}
-    $n = 0; $total = @($files).Count
+    $files = @($files)
+    $n = 0; $total = $files.Count
     foreach ($f in $files) {
         $n++
         Write-Host "`r  Checking contents... $n of $total" -NoNewline -ForegroundColor DarkGray
@@ -319,11 +320,11 @@ function Get-Comparison {
     # Files whose name and size appear on the other side are read; the rest cannot match
     $ixA = Get-NameSizeIndex $a.Map
     $ixB = Get-NameSizeIndex $b.Map
-    $toRead = New-Object System.Collections.Generic.List[object]
+    $toRead = New-Object System.Collections.ArrayList
     foreach ($k in $ixA.Keys) {
         if (-not $ixB.ContainsKey($k)) { continue }
-        foreach ($rel in $ixA[$k]) { $toRead.Add($a.Map[$rel]) }
-        foreach ($rel in $ixB[$k]) { $toRead.Add($b.Map[$rel]) }
+        foreach ($rel in $ixA[$k]) { [void]$toRead.Add($a.Map[$rel]) }
+        foreach ($rel in $ixB[$k]) { [void]$toRead.Add($b.Map[$rel]) }
     }
     $hashes = Read-Contents $toRead $errors
     $keysA = Get-Keys $a.Map $hashes
@@ -333,7 +334,7 @@ function Get-Comparison {
 
     $missingB  = New-Object System.Collections.Generic.List[string]
     $missingA  = New-Object System.Collections.Generic.List[string]
-    $different = New-Object System.Collections.Generic.List[object]
+    $different = New-Object System.Collections.ArrayList
     $elsewhere = New-Object System.Collections.Generic.List[string]
     $shown     = @{}
 
@@ -347,7 +348,7 @@ function Get-Comparison {
             # Same place, different content: an edited version. Newer = 'A' or 'B', '' when dates match
             $gap = ($a.Map[$rel].LastWriteTimeUtc - $b.Map[$rel].LastWriteTimeUtc).TotalSeconds
             $newer = if ([Math]::Abs($gap) -le 2) { '' } elseif ($gap -gt 0) { 'A' } else { 'B' }
-            $different.Add([pscustomobject]@{ Path = $rel; Newer = $newer })
+            [void]$different.Add([pscustomobject]@{ Path = $rel; Newer = $newer })
         } elseif ($byB.ContainsKey($k)) {
             $elsewhere.Add("A: $rel`n        = B: $($byB[$k][0])")            # same file, kept elsewhere in B
             $shown[$k] = $true
@@ -626,29 +627,29 @@ function Invoke-Duplicates([string]$Which) {
 
     # Only files that share a name and size with another file in the folder are read
     $ix = Get-NameSizeIndex $m.Map
-    $toRead = New-Object System.Collections.Generic.List[object]
+    $toRead = New-Object System.Collections.ArrayList
     foreach ($k in $ix.Keys) {
         if ($ix[$k].Count -lt 2) { continue }
-        foreach ($rel in $ix[$k]) { $toRead.Add($m.Map[$rel]) }
+        foreach ($rel in $ix[$k]) { [void]$toRead.Add($m.Map[$rel]) }
     }
     $hashes = Read-Contents $toRead $errors
 
     $groups = @{}
-    foreach ($f in $toRead) {
+    foreach ($f in @($toRead)) {
         $k = $hashes[$f.FullName]
         if (-not $k) { continue }
-        if (-not $groups.ContainsKey($k)) { $groups[$k] = New-Object System.Collections.Generic.List[object] }
-        $groups[$k].Add($f)
+        if (-not $groups.ContainsKey($k)) { $groups[$k] = New-Object System.Collections.ArrayList }
+        [void]$groups[$k].Add($f)
     }
     # In each group keep the copy that was there first (creation date), then the shortest path
-    $todo = New-Object System.Collections.Generic.List[object]
+    $todo = New-Object System.Collections.ArrayList
     $bytes = [long]0
     foreach ($k in $groups.Keys) {
         if ($groups[$k].Count -lt 2) { continue }
         $sorted = @($groups[$k] | Sort-Object CreationTimeUtc, { $_.FullName.Length }, FullName)
         $keep = $sorted[0]
         foreach ($f in $sorted[1..($sorted.Count - 1)]) {
-            $todo.Add([pscustomobject]@{ File = $f; Keep = $keep; Rel = $f.FullName.Substring($root.Length).TrimStart('\'); KeepRel = $keep.FullName.Substring($root.Length).TrimStart('\') })
+            [void]$todo.Add([pscustomobject]@{ File = $f; Keep = $keep; Rel = $f.FullName.Substring($root.Length).TrimStart('\'); KeepRel = $keep.FullName.Substring($root.Length).TrimStart('\') })
             $bytes += $f.Length
         }
     }
