@@ -84,7 +84,8 @@ function Get-DisplayRoot([string]$path) {
     return $path.TrimEnd('\')
 }
 
-# Use the \\?\ form when this PC allows it, so paths over 260 characters are read too
+# Use the \\?\ form when this PC allows it, so paths over 260 characters are read quickly
+# (where it is not allowed, Get-AllFiles falls back to Get-ChildItem for those folders)
 function Get-WalkRoot([string]$path) {
     $long = if ($path.StartsWith('\\')) { '\\?\UNC\' + $path.Substring(2) } else { '\\?\' + $path }
     try {
@@ -103,7 +104,10 @@ function Get-AllFiles([string]$Root) {
         $dir = $stack.Pop()
         $count = 0
         try {
-            foreach ($e in (New-Object IO.DirectoryInfo $dir).EnumerateFileSystemInfos()) {
+            # .NET refuses paths over 260 characters on most PCs; Get-ChildItem reads them fine
+            try { $items = (New-Object IO.DirectoryInfo $dir).GetFileSystemInfos() }
+            catch [IO.PathTooLongException] { $items = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop) }
+            foreach ($e in $items) {
                 $count++
                 $a = [int]$e.Attributes
                 if ($a -band 0x10) {
