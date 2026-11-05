@@ -232,7 +232,7 @@ function Get-FileMap([string]$Root) {
     $items = @(Get-ChildItem -LiteralPath $Root -File -Recurse -Force -ErrorAction SilentlyContinue -ErrorVariable scanErrors)
     foreach ($f in $items) {
         $rel = $f.FullName.Substring($Root.Length).TrimStart('\')
-        if (-not $map.ContainsKey($rel)) { $map.Add($rel, $f) }
+        if (-not $map.ContainsKey($rel)) { $map.Add($rel, $f.PSObject.BaseObject) }
     }
     foreach ($e in $scanErrors) { $errors.Add("$($e.TargetObject): $($e.Exception.Message)") }
     [pscustomobject]@{ Map = $map; Errors = $errors }
@@ -266,14 +266,13 @@ function Get-ContentKey($f, $errors) {
 }
 
 # Read the contents of the given files, with a one-line progress counter
-function Read-Contents($files, $errors) {
+function Read-Contents([object[]]$list, $errors) {
     $keys = @{}
-    $files = @($files)
-    $n = 0; $total = $files.Count
-    foreach ($f in $files) {
-        $n++
-        Write-Host "`r  Checking contents... $n of $total" -NoNewline -ForegroundColor DarkGray
-        $keys[$f.FullName] = Get-ContentKey $f $errors
+    $total = $list.Count
+    for ($i = 0; $i -lt $total; $i++) {
+        Write-Host "`r  Checking contents... $($i + 1) of $total" -NoNewline -ForegroundColor DarkGray
+        $item = $list[$i]
+        $keys[$item.FullName] = Get-ContentKey $item $errors
     }
     if ($total) { Write-Host "`r  Checking contents... $total file(s) read          " -ForegroundColor DarkGray }
     $keys
@@ -772,6 +771,8 @@ while ($true) {
         }
     } catch {
         Say "  FAILED: $($_.Exception.Message)  (line $($_.InvocationInfo.ScriptLineNumber))" 'Red'
+        Say "  $($_.Exception.GetType().FullName)" 'DarkGray'
+        Say "  $($_.ScriptStackTrace -replace "`r?`n", "`n  ")" 'DarkGray'
     }
     if ($quit) { break }
     $last = $choice
