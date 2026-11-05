@@ -2,15 +2,15 @@
 # Purpose: Compare two folders by file content, copy what is missing, replace older versions, remove duplicates
 # =============================================================================
 #  File Sync:
-#   1 = Compare   count the files in A and B and list what is missing from each
-#   2 = Add missing A -> B      copy the files B does not have
-#   3 = Add missing B -> A      copy the files A does not have
-#   4 = Add missing both ways   2 and 3 together; never replaces a file
-#   5 = Replace older A -> B    same file name in the same place but newer in A: replace B's copy
-#   6 = Replace older B -> A    same file name in the same place but newer in B: replace A's copy
-#   7 = Full sync   add missing files both ways, then replace every older copy
-#                   with the newer one, so A and B end up the same
-#                   (same date but different content: always left alone)
+#   1 = Compare A and B   count the files in A and B and list what is missing from each
+#   2 = Add: A -> B       copy the files B does not have
+#   3 = Add: B -> A       copy the files A does not have
+#   4 = Add: A <> B       2 and 3 together; never replaces a file
+#   5 = Replace: A -> B   same file name in the same place but newer in A: replace B's copy
+#   6 = Replace: B -> A   same file name in the same place but newer in B: replace A's copy
+#   7 = Sync              add missing files both ways, then replace every older copy
+#                         with the newer one, so A and B end up the same
+#                         (same date but different content: always left alone)
 #   8 = Duplicates  find identical files inside A or inside B, keep the oldest
 #                   copy of each and send the rest to the Recycle Bin
 #   9 = Settings    change Folder A or Folder B, and the 'filesync' shortcut,
@@ -20,7 +20,7 @@
 #  whatever folder they sit in. So a file that B keeps in a different folder is not
 #  "missing" and is never copied again. Only files whose name and size appear on the
 #  other side have their contents read, so most runs stay quick.
-#  Options 2-4 never replace a file; only Replace older (5-6) and Full sync (7) do,
+#  Options 2-4 never replace a file; only Replace (5-6) and Sync (7) do,
 #  and only an older copy with a newer one, after showing the list and asking.
 #  Only Duplicates (8) deletes, and only to the Recycle Bin, after showing the list
 #  and asking. Network and mapped drives have no Recycle Bin, so there it warns
@@ -491,7 +491,7 @@ function Invoke-Update([bool]$AtoB, [bool]$BtoA, $c = $null) {
         $miss = $null
         if ($AtoB -and -not $BtoA) { $miss = @{ To = 'B'; N = $c.MissingB.Count; Key = '2' } }
         if ($BtoA -and -not $AtoB) { $miss = @{ To = 'A'; N = $c.MissingA.Count; Key = '3' } }
-        if ($miss -and $miss.N) { Say "  $($miss.N) file(s) are missing from $($miss.To); use $($miss.Key) - Add missing to copy them." 'Yellow' }
+        if ($miss -and $miss.N) { Say "  $($miss.N) file(s) are missing from $($miss.To); use $($miss.Key) - Add to copy them." 'Yellow' }
         return
     }
     Show-Different 'OLDER COPIES TO REPLACE WITH THE NEWER VERSION' $todo
@@ -669,26 +669,21 @@ function Show-Duplicates {
 Clear-Host
 $last = ''; $quit = $false
 while ($true) {
-    $a = if ($Settings.FolderA) { $Settings.FolderA } else { 'not set' }
-    $b = if ($Settings.FolderB) { $Settings.FolderB } else { 'not set' }
     Say ""
     Say "  =============================================" 'Cyan'
     Say "        FILE SYNC" 'Cyan'
     Say "  =============================================" 'Cyan'
-    Say "    A  $a" 'DarkGray'
-    Say "    B  $b" 'DarkGray'
     Say ""
-    Say "    1  -  Compare" 'White'
-    Say "    2  -  Add missing A -> B" 'White'
-    Say "    3  -  Add missing B -> A" 'White'
-    Say "    4  -  Add missing both ways" 'White'
-    Say "    5  -  Replace older A -> B" 'White'
-    Say "    6  -  Replace older B -> A" 'White'
-    Say "    7  -  Full sync" 'White'
+    Say "    1  -  Compare A and B" 'White'
+    Say "    2  -  Add: A -> B" 'White'
+    Say "    3  -  Add: B -> A" 'White'
+    Say "    4  -  Add: A <> B" 'White'
+    Say "    5  -  Replace: A -> B" 'White'
+    Say "    6  -  Replace: B -> A" 'White'
+    Say "    7  -  Sync" 'White'
     Say "    8  -  Duplicates" 'White'
     Say "    9  -  Settings" 'White'
     Say "    0  -  Quit" 'White'
-    Say ""
     $choice = Read-MenuKey 'Choose 0-9' '0123456789' $last
     if ($choice -eq '0') { break }
     if ($choice -eq '9') {
