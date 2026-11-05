@@ -211,6 +211,34 @@ function Get-FileMap([string]$Root) {
     [pscustomobject]@{ Map = $map; Errors = $errors }
 }
 
+# Spot folders picked one level apart: most of one side's files sit under a subfolder of the
+# other (A = ...\X, B = ...\Parent where B holds X\...). Then nothing matches and every file
+# looks missing; copying would make a second copy one level off.
+# Returns $true when it showed a warning.
+function Show-FolderHint($c) {
+    $both = $c.A.Map.Count - $c.MissingB.Count
+    foreach ($side in @(@{ Name = 'B'; Outer = $c.B.Map; Inner = $c.A.Map }, @{ Name = 'A'; Outer = $c.A.Map; Inner = $c.B.Map })) {
+        $hits = @{}
+        foreach ($k in $side.Outer.Keys) {
+            $i = $k.IndexOf('\')
+            if ($i -lt 1 -or -not $side.Inner.ContainsKey($k.Substring($i + 1))) { continue }
+            $sub = $k.Substring(0, $i)
+            $hits[$sub] = 1 + [int]$hits[$sub]
+        }
+        if (-not $hits.Count) { continue }
+        $best = $hits.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 1
+        if ($best.Value -le $both) { continue }
+        $other = if ($side.Name -eq 'A') { 'B' } else { 'A' }
+        $fix   = Join-Path $Settings."Folder$($side.Name)" $best.Name
+        Say ""
+        Say "  CHECK THE FOLDERS: $($best.Value) file(s) in $other match files inside $($side.Name)\$($best.Name)." 'Yellow'
+        Say "  Did you mean Folder $($side.Name): $fix" 'Yellow'
+        Say "  Change it in 8 - Settings, or copying makes a second copy one folder off." 'Yellow'
+        return $true
+    }
+    return $false
+}
+
 function Get-Comparison {
     Say ""
     Say "  Reading A: $($Settings.FolderA)" 'DarkGray'
@@ -280,9 +308,10 @@ function Invoke-Compare {
     Say ""
     Show-Different 'IN BOTH BUT DIFFERENT' $c.Different
     Show-Errors $c.Errors
+    if (Show-FolderHint $c) { Say ""; return }
     Say ""
     if (-not $c.MissingA.Count -and -not $c.MissingB.Count -and -not $c.Different.Count) { Say "  DONE - A and B have the same files." 'Green' }
-    else { Say "  DONE - 2, 3 or 4 copies the missing files; 5 or 6 replaces older copies with newer ones; 7 does both." 'Green' }
+    else { Say "  DONE - 2-4 add the missing files; 5-6 replace older copies with newer ones; 7 does both." 'Green' }
 }
 
 # =====================================================================
@@ -319,6 +348,9 @@ function Copy-Missing([string]$FromName, [string]$ToName, $Source, [string[]]$Mi
 
 # Scan errors mean the comparison may be incomplete: say so and let the user decide
 function Confirm-Scan($c) {
+    if (Show-FolderHint $c) {
+        if ((Read-MenuKey 'Continue anyway? y/n' 'ynYN') -notin 'y', 'Y') { Say "  Cancelled." 'Yellow'; return $false }
+    }
     if (-not $c.Errors.Count) { return $true }
     Show-Errors $c.Errors
     Say "  Some items could not be read, so the comparison may be incomplete." 'Yellow'
@@ -356,7 +388,14 @@ function Invoke-Update([bool]$AtoB, [bool]$BtoA, $c = $null) {
         Say "  $($other.Count) file(s) newer in $side left alone (use $(if ($AtoB) { '6' } else { '5' }) or 7 for those)." 'Yellow'
         Say ""
     }
-    if (-not $todo.Count) { Say "  Nothing to update." 'Green'; return }
+    if (-not $todo.Count) {
+        Say "  Nothing to replace." 'Green'
+        $miss = $null
+        if ($AtoB -and -not $BtoA) { $miss = @{ To = 'B'; N = $c.MissingB.Count; Key = '2' } }
+        if ($BtoA -and -not $AtoB) { $miss = @{ To = 'A'; N = $c.MissingA.Count; Key = '3' } }
+        if ($miss -and $miss.N) { Say "  $($miss.N) file(s) are missing from $($miss.To); use $($miss.Key) - Add missing to copy them." 'Yellow' }
+        return
+    }
     Show-Different 'OLDER COPIES TO REPLACE WITH THE NEWER VERSION' $todo
     Say ""
     if ((Read-MenuKey "Replace $($todo.Count) older file(s)? y/n" 'ynYN') -notin 'y', 'Y') { Say "  Skipped." 'Yellow'; return }
