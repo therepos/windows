@@ -6,13 +6,15 @@
 #   2 = A -> B    copy the files missing from B
 #   3 = B -> A    copy the files missing from A
 #   4 = Both      copy both ways so A and B end up with the same files
-#   5 = Update    files on both sides that differ: replace the older copy
-#                 with the newer one (same date but different size: left alone)
-#   6 = Settings  change Folder A or Folder B, and the 'filesync' shortcut,
+#   5 = Update A -> B   files that differ and are newer in A: replace B's copy
+#   6 = Update B -> A   files that differ and are newer in B: replace A's copy
+#   7 = Update both     replace every older copy with the newer one
+#                 (same date but different size: always left alone)
+#   8 = Settings  change Folder A or Folder B, and the 'filesync' shortcut,
 #                 which runs a local copy in %LOCALAPPDATA%\filesync
 #   0 = Quit      closes this window
 #  Files match by relative path and name. Nothing is ever deleted. Options 2-4
-#  never replace a file; only Update does, and only an older copy with a newer
+#  never replace a file; only Update (5-7) does, and only an older copy with a newer
 #  one, after showing the list and asking.
 #  OneDrive / SharePoint folders work too; online-only files are downloaded
 #  when copied. Local, network and mapped drives are fine.
@@ -268,7 +270,7 @@ function Invoke-Compare {
     Show-Errors $c.Errors
     Say ""
     if (-not $c.MissingA.Count -and -not $c.MissingB.Count -and -not $c.Different.Count) { Say "  DONE - A and B have the same files." 'Green' }
-    else { Say "  DONE - 2, 3 or 4 copies the missing files; 5 replaces older copies with newer ones." 'Green' }
+    else { Say "  DONE - 2, 3 or 4 copies the missing files; 5, 6 or 7 replaces older copies with newer ones." 'Green' }
 }
 
 # =====================================================================
@@ -323,14 +325,21 @@ function Invoke-Sync([bool]$AtoB, [bool]$BtoA) {
 # =====================================================================
 #  UPDATE: replace the older of two differing copies with the newer one
 # =====================================================================
-function Invoke-Update {
+# $AtoB: replace B's copy where A is newer; $BtoA: replace A's copy where B is newer
+function Invoke-Update([bool]$AtoB, [bool]$BtoA) {
     $c = Get-Comparison
     if (-not (Confirm-Scan $c)) { return }
-    $todo = @($c.Different | Where-Object { $_.Newer })
+    $todo = @($c.Different | Where-Object { ($AtoB -and $_.Newer -eq 'A') -or ($BtoA -and $_.Newer -eq 'B') })
     $tied = @($c.Different | Where-Object { -not $_.Newer })
+    $other = @($c.Different | Where-Object { (-not $AtoB -and $_.Newer -eq 'A') -or (-not $BtoA -and $_.Newer -eq 'B') })
     Say ""
     if ($tied.Count) {
         Show-List 'Same date but different size - left alone, check these yourself' (Format-Different $tied) 'Yellow'
+        Say ""
+    }
+    if ($other.Count) {
+        $side = if ($AtoB) { 'B' } else { 'A' }
+        Say "  $($other.Count) file(s) newer in $side left alone (use $(if ($AtoB) { '6' } else { '5' }) or 7 for those)." 'Yellow'
         Say ""
     }
     if (-not $todo.Count) { Say "  Nothing to update." 'Green'; return }
@@ -375,13 +384,15 @@ while ($true) {
     Say "    2  -  Copy A -> B" 'White'
     Say "    3  -  Copy B -> A" 'White'
     Say "    4  -  Copy both ways" 'White'
-    Say "    5  -  Update older with newer" 'White'
-    Say "    6  -  Settings" 'White'
+    Say "    5  -  Update A -> B" 'White'
+    Say "    6  -  Update B -> A" 'White'
+    Say "    7  -  Update both ways" 'White'
+    Say "    8  -  Settings" 'White'
     Say "    0  -  Quit" 'White'
     Say ""
-    $choice = Read-MenuKey 'Choose 0-6' '0123456' $last
+    $choice = Read-MenuKey 'Choose 0-8' '012345678' $last
     if ($choice -eq '0') { break }
-    if ($choice -eq '6') {
+    if ($choice -eq '8') {
         if (@(Show-Settings) -contains 'quit') { break }
         Clear-Host
         continue
@@ -393,7 +404,9 @@ while ($true) {
             '2' { Invoke-Sync $true  $false }
             '3' { Invoke-Sync $false $true }
             '4' { Invoke-Sync $true  $true }
-            '5' { Invoke-Update }
+            '5' { Invoke-Update $true  $false }
+            '6' { Invoke-Update $false $true }
+            '7' { Invoke-Update $true  $true }
         }
     } catch {
         Say "  FAILED: $($_.Exception.Message)" 'Red'
