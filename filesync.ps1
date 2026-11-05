@@ -2,7 +2,8 @@
 # Purpose: Compare two folders by file content, copy what is missing, replace older versions, remove duplicates
 # =============================================================================
 #  File Sync:
-#   1 = Compare A and B   count the files in A and B and list what is missing from each
+#   1 = Compare A and B   count the files in A and B; each list can be viewed a page at a
+#                         time or saved as Report FileSync yyyyMMdd-HHmm.txt in Downloads
 #   2 = Add: A -> B       copy the files B does not have
 #   3 = Add: B -> A       copy the files A does not have
 #   4 = Add: A <> B       2 and 3 together; never replaces a file
@@ -28,14 +29,16 @@
 #  OneDrive / SharePoint folders work too; online-only files are downloaded when
 #  read or copied. Local, network and mapped drives are fine.
 #  One keypress picks an option (no Enter). After each action the menu comes
-#  back with the last action as the default, so Enter repeats it.
+#  back with the last action as the default, so Enter repeats it. Before a copy,
+#  replace or delete the first 10 files are shown; v on the y/n/v prompt shows all.
 #  Folders are asked each run and not saved (fine on a shared PC); they are
 #  kept only while this window is open. No admin, no downloads.
 # =============================================================================
 
 $ToolDir      = Join-Path $env:LOCALAPPDATA 'filesync'
 $ScriptUrl    = 'https://github.com/therepos/windows/raw/main/filesync.ps1'
-$MaxListed    = 40                      # lines shown per list before "... and N more"
+$Preview      = 10                      # lines shown before "... and N more"
+$PageSize     = 40                      # lines per page when viewing a full list
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
@@ -96,6 +99,16 @@ function Test-Overlap([string]$a, [string]$b) {
     $a = $a.TrimEnd('\') + '\'
     $b = $b.TrimEnd('\') + '\'
     $a.StartsWith($b, [StringComparison]::OrdinalIgnoreCase) -or $b.StartsWith($a, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-DownloadsFolder {
+    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders'
+    $raw = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).'{374DE290-123F-4565-9164-39C4925E467B}'
+    if ($raw) {
+        $path = [Environment]::ExpandEnvironmentVariables($raw)
+        if (Test-Path -LiteralPath $path) { return $path }
+    }
+    return (Join-Path $env:USERPROFILE 'Downloads')
 }
 
 function Format-Size([long]$bytes) {
@@ -363,27 +376,42 @@ function Get-Comparison {
     }
 }
 
+# Title, count and the first few lines; the rest is a count ("v" on the next prompt views all)
 function Show-List([string]$title, [string[]]$items, [string]$color, [string]$indent = '  ') {
     Say "$indent$title ($($items.Count))" $color
     if (-not $items.Count) { Say "$indent  none" 'Green'; return }
-    $items | Select-Object -First $MaxListed | ForEach-Object { Say "$indent  $_" 'White' }
-    if ($items.Count -gt $MaxListed) { Say "$indent  ... and $($items.Count - $MaxListed) more" 'DarkGray' }
+    $items | Select-Object -First $Preview | ForEach-Object { Say "$indent  $_" 'White' }
+    if ($items.Count -gt $Preview) { Say "$indent  ... and $($items.Count - $Preview) more" 'DarkGray' }
 }
 
-# Files in both but different, grouped: A Newer, B Newer, Same Date
-function Show-Different([string]$title, $items) {
-    Say "  $title ($(@($items).Count))" 'Cyan'
-    if (-not @($items).Count) { Say "    none" 'Green'; return }
-    $groups = @(
-        @{ Name = 'A Newer';                      Items = @($items | Where-Object { $_.Newer -eq 'A' }) },
-        @{ Name = 'B Newer';                      Items = @($items | Where-Object { $_.Newer -eq 'B' }) },
-        @{ Name = 'Same Date, Different Content'; Items = @($items | Where-Object { -not $_.Newer }) }
-    )
-    foreach ($g in $groups) {
-        if (-not $g.Items.Count) { continue }
+# The whole list, a page at a time
+function Show-Page([string]$title, [string[]]$items) {
+    if (-not $items.Count) { Say ""; Say "  $title (0)" 'Cyan'; Say "    none" 'Green'; return }
+    for ($i = 0; $i -lt $items.Count; $i += $PageSize) {
+        $end = [Math]::Min($i + $PageSize, $items.Count)
         Say ""
-        Show-List $g.Name @($g.Items | ForEach-Object { $_.Path }) 'White' '    '
+        Say "  $title  $($i + 1)-$end of $($items.Count)" 'Cyan'
+        for ($j = $i; $j -lt $end; $j++) { Say "    $($items[$j])" 'White' }
+        if ($end -ge $items.Count) { break }
+        if ((Read-MenuKey "Next $([Math]::Min($PageSize, $items.Count - $end))? y/n" 'ynYN') -notin 'y', 'Y') { break }
     }
+}
+
+# y/n question that also accepts v to view the full list first
+function Confirm-Action([string]$Prompt, [string]$Title, [string[]]$Items) {
+    while ($true) {
+        $k = Read-MenuKey "$Prompt y/n/v" 'ynvYNV'
+        if ($k -in 'v', 'V') { Show-Page $Title $Items; Say ""; continue }
+        return ($k -in 'y', 'Y')
+    }
+}
+
+# Files in both but different, as "path  (A newer)" lines
+function Format-Different($items) {
+    @($items | ForEach-Object {
+        $tag = if ($_.Newer) { "$($_.Newer) newer" } else { 'same date, different content' }
+        "$($_.Path)  ($tag)"
+    })
 }
 
 function Show-Errors([string[]]$errors) {
@@ -396,22 +424,60 @@ function Show-Errors([string[]]$errors) {
     Say "  or for OneDrive files choose 'Always keep on this device'." 'DarkGray'
 }
 
+# Everything Compare found, as one text file in Downloads
+function Save-Report($c, $sections) {
+    $name = "Report FileSync $(Get-Date -Format 'yyyyMMdd-HHmm').txt"
+    $path = Join-Path (Get-DownloadsFolder) $name
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("File Sync report  $(Get-Date -Format 'yyyy-MM-dd HH:mm')")
+    $lines.Add("A: $($Settings.FolderA)  ($($c.A.Map.Count) files)")
+    $lines.Add("B: $($Settings.FolderB)  ($($c.B.Map.Count) files)")
+    foreach ($sec in $sections) {
+        $lines.Add(''); $lines.Add("$($sec.Title) ($($sec.Items.Count))")
+        if (-not $sec.Items.Count) { $lines.Add('  none') }
+        foreach ($i in $sec.Items) { $lines.Add("  $($i.Replace("`n", "`n  "))") }
+    }
+    if ($c.Errors.Count) {
+        $lines.Add(''); $lines.Add("COULD NOT BE READ ($($c.Errors.Count))")
+        foreach ($e in $c.Errors) { $lines.Add("  $e") }
+    }
+    $lines | Out-File -LiteralPath $path -Encoding UTF8
+    Say "  Saved: $path" 'Green'
+}
+
+# Counts first; each list can be viewed a page at a time or saved as a report
 function Invoke-Compare {
     $c = Get-Comparison
-    Say ""
-    Say "  A: $($c.A.Map.Count) file(s)    B: $($c.B.Map.Count) file(s)" 'White'
-    Say ""
-    Show-List 'MISSING FROM B (ONLY IN A)' $c.MissingB 'Cyan'
-    Say ""
-    Show-List 'MISSING FROM A (ONLY IN B)' $c.MissingA 'Cyan'
-    Say ""
-    Show-List 'SAME FILE, DIFFERENT PLACE - NOT COPIED, THE OTHER SIDE HAS IT' $c.Elsewhere 'Cyan'
-    Say ""
-    Show-Different 'IN BOTH BUT DIFFERENT (SAME PLACE, DIFFERENT CONTENT)' $c.Different
+    $sections = @(
+        @{ Title = 'MISSING FROM B (ONLY IN A)';                              Items = $c.MissingB },
+        @{ Title = 'MISSING FROM A (ONLY IN B)';                              Items = $c.MissingA },
+        @{ Title = 'SAME FILE, DIFFERENT PLACE - NOT COPIED, THE OTHER SIDE HAS IT'; Items = $c.Elsewhere },
+        @{ Title = 'IN BOTH BUT DIFFERENT (SAME PLACE, DIFFERENT CONTENT)';  Items = (Format-Different $c.Different) }
+    )
     Show-Errors $c.Errors
-    Say ""
-    if (-not $c.MissingA.Count -and -not $c.MissingB.Count -and -not $c.Different.Count) { Say "  DONE - A and B have the same files." 'Green' }
-    else { Say "  DONE - 2-4 add the missing files; 5-6 replace older copies with newer ones; 7 does both." 'Green' }
+    while ($true) {
+        Say ""
+        Say "  A: $($c.A.Map.Count) file(s)    B: $($c.B.Map.Count) file(s)" 'White'
+        if (-not $c.MissingA.Count -and -not $c.MissingB.Count -and -not $c.Different.Count) { Say "  A and B have the same files." 'Green' }
+        Say ""
+        Say "    1  -  Missing from B (only in A)      $($c.MissingB.Count.ToString().PadLeft(6))" 'White'
+        Say "    2  -  Missing from A (only in B)      $($c.MissingA.Count.ToString().PadLeft(6))" 'White'
+        Say "    3  -  Same file, different place      $($c.Elsewhere.Count.ToString().PadLeft(6))" 'White'
+        Say "    4  -  In both but different           $($c.Different.Count.ToString().PadLeft(6))" 'White'
+        Say "    5  -  Save report to Downloads" 'White'
+        Say "    6  -  Back" 'White'
+        Say "    0  -  Quit" 'White'
+        $k = Read-MenuKey 'Choose 0-6' '0123456'
+        switch ($k) {
+            '1' { Show-Page $sections[0].Title $sections[0].Items }
+            '2' { Show-Page $sections[1].Title $sections[1].Items }
+            '3' { Show-Page $sections[2].Title $sections[2].Items }
+            '4' { Show-Page $sections[3].Title $sections[3].Items }
+            '5' { Save-Report $c $sections }
+            '6' { return 'back' }
+            '0' { return 'quit' }
+        }
+    }
 }
 
 # =====================================================================
@@ -423,9 +489,10 @@ function Copy-Missing([string]$FromName, [string]$ToName, $Source, [string[]]$Mi
     $to = $Settings."Folder$ToName"
     Say ""
     if (-not $Missing.Count) { Say "  $FromName -> ${ToName}: nothing to copy, $ToName already has every file in $FromName." 'Green'; return }
-    Show-List "$FromName -> ${ToName}: FILES TO COPY" $Missing 'Cyan'
+    $title = "$FromName -> ${ToName}: FILES TO COPY"
+    Show-List $title $Missing 'Cyan'
     Say ""
-    if ((Read-MenuKey "Copy $($Missing.Count) file(s) into Folder ${ToName}? y/n" 'ynYN') -notin 'y', 'Y') { Say "  Skipped." 'Yellow'; return }
+    if (-not (Confirm-Action "Copy $($Missing.Count) file(s) into Folder ${ToName}?" $title $Missing)) { Say "  Skipped." 'Yellow'; return }
 
     $copied = 0; $n = 0
     $failed = New-Object System.Collections.Generic.List[string]
@@ -494,9 +561,11 @@ function Invoke-Update([bool]$AtoB, [bool]$BtoA, $c = $null) {
         if ($miss -and $miss.N) { Say "  $($miss.N) file(s) are missing from $($miss.To); use $($miss.Key) - Add to copy them." 'Yellow' }
         return
     }
-    Show-Different 'OLDER COPIES TO REPLACE WITH THE NEWER VERSION' $todo
+    $title = 'OLDER COPIES TO REPLACE WITH THE NEWER VERSION'
+    $lines = Format-Different $todo
+    Show-List $title $lines 'Cyan'
     Say ""
-    if ((Read-MenuKey "Replace $($todo.Count) older file(s)? y/n" 'ynYN') -notin 'y', 'Y') { Say "  Skipped." 'Yellow'; return }
+    if (-not (Confirm-Action "Replace $($todo.Count) older file(s)?" $title $lines)) { Say "  Skipped." 'Yellow'; return }
 
     $done = 0; $n = 0
     $failed = New-Object System.Collections.Generic.List[string]
@@ -592,18 +661,16 @@ function Invoke-Duplicates([string]$Which) {
 
     Say ""
     Say "  DUPLICATES IN $Which ($groupCount file(s) exist more than once, $($todo.Count) extra cop$(if ($todo.Count -eq 1) { 'y' } else { 'ies' }), $(Format-Size $bytes))" 'Cyan'
-    Say "  TO DELETE   the copy being kept is shown after =" 'Cyan'
-    $todo | Select-Object -First $MaxListed | ForEach-Object {
-        Say "    $($_.Rel)" 'White'
-        Say "      = $($_.KeepRel)" 'DarkGray'
-    }
-    if ($todo.Count -gt $MaxListed) { Say "    ... and $($todo.Count - $MaxListed) more" 'DarkGray' }
+    $title = 'TO DELETE   (the copy being kept is shown after =)'
+    $lines = @($todo | ForEach-Object { "$($_.Rel)`n      = $($_.KeepRel)" })
+    Show-List $title $lines 'Cyan'
     Say ""
 
     $bin = Test-RecycleBin $root
     if ($bin) {
-        if ((Read-MenuKey "Send $($todo.Count) file(s) to the Recycle Bin? y/n" 'ynYN') -notin 'y', 'Y') { Say "  Skipped." 'Yellow'; return }
+        if (-not (Confirm-Action "Send $($todo.Count) file(s) to the Recycle Bin?" $title $lines)) { Say "  Skipped." 'Yellow'; return }
     } else {
+        if ((Read-MenuKey 'View the full list first? y/n' 'ynYN') -in 'y', 'Y') { Show-Page $title $lines; Say "" }
         Say "  NO RECYCLE BIN ON THIS DRIVE - DELETING HERE IS PERMANENT AND CANNOT BE UNDONE." 'Red'
         if ((Read-Host "  Type yes to delete $($todo.Count) file(s) permanently, anything else to skip").Trim() -ne 'yes') { Say "  Skipped." 'Yellow'; return }
     }
@@ -693,7 +760,7 @@ while ($true) {
     }
     try {
         switch ($choice) {
-            '1' { Confirm-Folders; Invoke-Compare }
+            '1' { Confirm-Folders; if (@(Invoke-Compare) -contains 'quit') { $quit = $true } }
             '2' { Confirm-Folders; Invoke-Sync $true  $false }
             '3' { Confirm-Folders; Invoke-Sync $false $true }
             '4' { Confirm-Folders; Invoke-Sync $true  $true }
