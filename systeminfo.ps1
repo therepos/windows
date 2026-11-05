@@ -5,7 +5,8 @@
 #   1 = Windows laptop
 #   2 = Android phone
 #   3 = Both
-#   0 = Quit
+#   0 = Quit      closes this window
+#  One keypress picks an option (no Enter).
 #  Output: asks for a folder, defaults to Downloads.
 #
 # =============================================================================
@@ -49,6 +50,29 @@ function Get-LaptopModel {
 }
 
 function Say($msg, $color = 'Gray') { Write-Host $msg -ForegroundColor $color }
+
+# One keypress picks a menu option (no Enter needed); Enter picks the default, if any
+function Read-MenuKey([string]$Prompt, [string]$Valid, [string]$Default = '') {
+    Write-Host "  $Prompt$(if ($Default) { " [$Default]" }): " -NoNewline
+    while ($true) {
+        try {
+            $k = [Console]::ReadKey($true)
+            $c = if ($k.Key -eq 'Enter') { $Default } else { "$($k.KeyChar)" }
+        } catch {
+            # No keyboard (input redirected): fall back to a typed line
+            $line = [Console]::ReadLine()
+            if ($null -eq $line) { throw 'No keyboard input available' }
+            $c = $line.Trim(); if (-not $c) { $c = $Default }
+        }
+        if ($c.Length -eq 1 -and $Valid.Contains($c)) {
+            Write-Host $c
+            # Swallow an Enter typed out of habit so it does not reach the next prompt
+            Start-Sleep -Milliseconds 300
+            try { while ([Console]::KeyAvailable) { [void][Console]::ReadKey($true) } } catch {}
+            return $c
+        }
+    }
+}
 
 function Get-DownloadsFolder {
     $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders'
@@ -345,12 +369,8 @@ Say "    3  -  Both" 'White'
 Say "    0  -  Quit" 'White'
 Say ""
 
-do {
-    $choice = "$(Read-Host '  Choose 0-3 and press Enter')".Trim()
-    if ($choice -notin '0','1','2','3') { Say "  Please type 1, 2, 3 or 0." 'Red' }
-} until ($choice -in '0','1','2','3')
-
-if ($choice -eq '0') { return }
+$choice = Read-MenuKey 'Choose 0-3' '0123'
+if ($choice -eq '0') { [Environment]::Exit(0) }   # Quit closes this window
 
 $OutDir = Select-OutputFolder
 switch ($choice) {
@@ -361,4 +381,6 @@ switch ($choice) {
 
 Say "  Reports are in: $OutDir" 'Green'
 Say ""
-Read-Host "  Press Enter to exit" | Out-Null
+# This window was opened just for the report, so pause before it closes
+Say "  Press any key to close this window" 'DarkGray'
+try { [void][Console]::ReadKey($true) } catch { [void][Console]::ReadLine() }
