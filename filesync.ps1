@@ -1,24 +1,32 @@
 # irm https://github.com/therepos/windows/raw/main/filesync.ps1 | iex
-# Purpose: Compare two folders and copy the files missing from either side, one way or both
+# Purpose: Compare two folders by file content, copy what is missing, replace older versions, remove duplicates
 # =============================================================================
 #  File Sync:
 #   1 = Compare   count the files in A and B and list what is missing from each
-#   2 = Add missing A -> B      copy the files missing from B
-#   3 = Add missing B -> A      copy the files missing from A
+#   2 = Add missing A -> B      copy the files B does not have
+#   3 = Add missing B -> A      copy the files A does not have
 #   4 = Add missing both ways   2 and 3 together; never replaces a file
-#   5 = Replace older A -> B    files that differ and are newer in A: replace B's copy
-#   6 = Replace older B -> A    files that differ and are newer in B: replace A's copy
+#   5 = Replace older A -> B    same file name in the same place but newer in A: replace B's copy
+#   6 = Replace older B -> A    same file name in the same place but newer in B: replace A's copy
 #   7 = Full sync   add missing files both ways, then replace every older copy
 #                   with the newer one, so A and B end up the same
-#                 (same date but different size: always left alone)
-#   8 = Settings  change Folder A or Folder B, and the 'filesync' shortcut,
-#                 which runs a local copy in %LOCALAPPDATA%\filesync
-#   0 = Quit      closes this window
-#  Files match by relative path and name. Nothing is ever deleted. Options 2-4
-#  never replace a file; only Replace older (5-6) and Full sync (7) do, and only an older copy with a newer
-#  one, after showing the list and asking.
-#  OneDrive / SharePoint folders work too; online-only files are downloaded
-#  when copied. Local, network and mapped drives are fine.
+#                   (same date but different content: always left alone)
+#   8 = Duplicates  find identical files inside A or inside B, keep the oldest
+#                   copy of each and send the rest to the Recycle Bin
+#   9 = Settings    change Folder A or Folder B, and the 'filesync' shortcut,
+#                   which runs a local copy in %LOCALAPPDATA%\filesync
+#   0 = Quit        closes this window
+#  Two files are the same file when their name, size and contents (SHA-256) match,
+#  whatever folder they sit in. So a file that B keeps in a different folder is not
+#  "missing" and is never copied again. Only files whose name and size appear on the
+#  other side have their contents read, so most runs stay quick.
+#  Options 2-4 never replace a file; only Replace older (5-6) and Full sync (7) do,
+#  and only an older copy with a newer one, after showing the list and asking.
+#  Only Duplicates (8) deletes, and only to the Recycle Bin, after showing the list
+#  and asking. Network and mapped drives have no Recycle Bin, so there it warns
+#  that the delete is permanent and asks you to type yes.
+#  OneDrive / SharePoint folders work too; online-only files are downloaded when
+#  read or copied. Local, network and mapped drives are fine.
 #  One keypress picks an option (no Enter). After each action the menu comes
 #  back with the last action as the default, so Enter repeats it.
 #  Folders are asked each run and not saved (fine on a shared PC); they are
@@ -90,6 +98,12 @@ function Test-Overlap([string]$a, [string]$b) {
     $a.StartsWith($b, [StringComparison]::OrdinalIgnoreCase) -or $b.StartsWith($a, [StringComparison]::OrdinalIgnoreCase)
 }
 
+function Format-Size([long]$bytes) {
+    if ($bytes -ge 1GB) { return '{0:N1} GB' -f ($bytes / 1GB) }
+    if ($bytes -ge 1MB) { return '{0:N0} MB' -f ($bytes / 1MB) }
+    return '{0:N0} KB' -f [Math]::Max(1, $bytes / 1KB)
+}
+
 # =====================================================================
 #  FOLDERS  (asked on first use in each run; nothing is saved to disk)
 # =====================================================================
@@ -118,9 +132,9 @@ function Set-FolderSetting([string]$Which) {
     }
 }
 
-# Both folders must be set (asked on first use) and reachable right now
-function Confirm-Folders {
-    foreach ($w in 'A', 'B') {
+# The named folders must be set (asked on first use) and reachable right now
+function Confirm-Folders([string[]]$Which = @('A', 'B')) {
+    foreach ($w in $Which) {
         $cur = $Settings."Folder$w"
         if ($cur -and (Test-PathQuiet $cur 'Container')) { continue }
         if ($cur) { Say "  Folder $w is not available right now: $cur" 'Yellow' }
@@ -194,7 +208,7 @@ function Show-Settings {
 }
 
 # =====================================================================
-#  COMPARE
+#  SCAN
 # =====================================================================
 
 # Every file under $Root keyed by relative path (case-insensitive); unreadable items go to Errors
@@ -211,33 +225,73 @@ function Get-FileMap([string]$Root) {
     [pscustomobject]@{ Map = $map; Errors = $errors }
 }
 
-# Spot folders picked one level apart: most of one side's files sit under a subfolder of the
-# other (A = ...\X, B = ...\Parent where B holds X\...). Then nothing matches and every file
-# looks missing; copying would make a second copy one level off.
-# Returns $true when it showed a warning.
-function Show-FolderHint($c) {
-    $both = $c.A.Map.Count - $c.MissingB.Count
-    foreach ($side in @(@{ Name = 'B'; Outer = $c.B.Map; Inner = $c.A.Map }, @{ Name = 'A'; Outer = $c.A.Map; Inner = $c.B.Map })) {
-        $hits = @{}
-        foreach ($k in $side.Outer.Keys) {
-            $i = $k.IndexOf('\')
-            if ($i -lt 1 -or -not $side.Inner.ContainsKey($k.Substring($i + 1))) { continue }
-            $sub = $k.Substring(0, $i)
-            $hits[$sub] = 1 + [int]$hits[$sub]
-        }
-        if (-not $hits.Count) { continue }
-        $best = $hits.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 1
-        if ($best.Value -le $both) { continue }
-        $other = if ($side.Name -eq 'A') { 'B' } else { 'A' }
-        $fix   = Join-Path $Settings."Folder$($side.Name)" $best.Name
-        Say ""
-        Say "  CHECK THE FOLDERS: $($best.Value) file(s) in $other match files inside $($side.Name)\$($best.Name)." 'Yellow'
-        Say "  Did you mean Folder $($side.Name): $fix" 'Yellow'
-        Say "  Change it in 8 - Settings, or copying makes a second copy one folder off." 'Yellow'
-        return $true
+# "name|size" -> list of relative paths with that name and size. Only files that share
+# a name and size with another file can be the same file, so only those get read.
+function Get-NameSizeIndex($map) {
+    $ix = [System.Collections.Generic.Dictionary[string,object]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($rel in $map.Keys) {
+        $f = $map[$rel]
+        $k = "$($f.Name)|$($f.Length)"
+        if (-not $ix.ContainsKey($k)) { $ix[$k] = New-Object System.Collections.Generic.List[string] }
+        $ix[$k].Add($rel)
     }
-    return $false
+    $ix
 }
+
+$Sha256 = [System.Security.Cryptography.SHA256]::Create()
+
+# Content key "name|size|sha256" (lower case), or $null when the file cannot be read
+function Get-ContentKey($f, $errors) {
+    try {
+        $s = [IO.File]::OpenRead($f.FullName)
+        try { $h = [BitConverter]::ToString($Sha256.ComputeHash($s)).Replace('-', '') } finally { $s.Dispose() }
+        return "$($f.Name)|$($f.Length)|$h".ToLowerInvariant()
+    } catch {
+        $errors.Add("$($f.FullName): $($_.Exception.Message)")
+        return $null
+    }
+}
+
+# Read the contents of the given files, with a one-line progress counter
+function Read-Contents($files, $errors) {
+    $keys = @{}
+    $n = 0; $total = @($files).Count
+    foreach ($f in $files) {
+        $n++
+        Write-Host "`r  Checking contents... $n of $total" -NoNewline -ForegroundColor DarkGray
+        $keys[$f.FullName] = Get-ContentKey $f $errors
+    }
+    if ($total) { Write-Host "`r  Checking contents... $total file(s) read          " -ForegroundColor DarkGray }
+    $keys
+}
+
+# Key per file: the content key when read, "name|size" when nothing on the other side
+# could match it, $null when it could not be read (then it is left out of every action)
+function Get-Keys($map, $hashes) {
+    $keys = [System.Collections.Generic.Dictionary[string,object]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($rel in $map.Keys) {
+        $f = $map[$rel]
+        if ($hashes.ContainsKey($f.FullName)) { $keys[$rel] = $hashes[$f.FullName] }
+        else { $keys[$rel] = "$($f.Name)|$($f.Length)".ToLowerInvariant() }
+    }
+    $keys
+}
+
+# Content key -> relative paths holding it
+function Get-ByKey($keys) {
+    $by = @{}
+    foreach ($rel in $keys.Keys) {
+        $k = $keys[$rel]
+        if (-not $k) { continue }
+        if (-not $by.ContainsKey($k)) { $by[$k] = New-Object System.Collections.Generic.List[string] }
+        $by[$k].Add($rel)
+    }
+    $by
+}
+
+# =====================================================================
+#  COMPARE
+# =====================================================================
 
 function Get-Comparison {
     Say ""
@@ -245,22 +299,67 @@ function Get-Comparison {
     $a = Get-FileMap $Settings.FolderA
     Say "  Reading B: $($Settings.FolderB)" 'DarkGray'
     $b = Get-FileMap $Settings.FolderB
-    # In both, but not the same file: Newer = 'A' or 'B', or '' when the dates match (size differs)
-    $different = foreach ($k in $a.Map.Keys) {
-        if (-not $b.Map.ContainsKey($k)) { continue }
-        $fa = $a.Map[$k]; $fb = $b.Map[$k]
-        $gap = ($fa.LastWriteTimeUtc - $fb.LastWriteTimeUtc).TotalSeconds
-        if ($fa.Length -eq $fb.Length -and [Math]::Abs($gap) -le 2) { continue }
-        $newer = if ([Math]::Abs($gap) -le 2) { '' } elseif ($gap -gt 0) { 'A' } else { 'B' }
-        [pscustomobject]@{ Path = $k; Newer = $newer }
+    $errors = New-Object System.Collections.Generic.List[string]
+    foreach ($e in $a.Errors) { $errors.Add($e) }
+    foreach ($e in $b.Errors) { $errors.Add($e) }
+
+    # Files whose name and size appear on the other side are read; the rest cannot match
+    $ixA = Get-NameSizeIndex $a.Map
+    $ixB = Get-NameSizeIndex $b.Map
+    $toRead = New-Object System.Collections.Generic.List[object]
+    foreach ($k in $ixA.Keys) {
+        if (-not $ixB.ContainsKey($k)) { continue }
+        foreach ($rel in $ixA[$k]) { $toRead.Add($a.Map[$rel]) }
+        foreach ($rel in $ixB[$k]) { $toRead.Add($b.Map[$rel]) }
     }
+    $hashes = Read-Contents $toRead $errors
+    $keysA = Get-Keys $a.Map $hashes
+    $keysB = Get-Keys $b.Map $hashes
+    $byA = Get-ByKey $keysA
+    $byB = Get-ByKey $keysB
+
+    $missingB  = New-Object System.Collections.Generic.List[string]
+    $missingA  = New-Object System.Collections.Generic.List[string]
+    $different = New-Object System.Collections.Generic.List[object]
+    $elsewhere = New-Object System.Collections.Generic.List[string]
+    $shown     = @{}
+
+    foreach ($rel in $a.Map.Keys) {
+        $k = $keysA[$rel]
+        if (-not $k) { continue }
+        if ($b.Map.ContainsKey($rel)) {
+            $kb = $keysB[$rel]
+            if (-not $kb) { continue }
+            if ($kb -eq $k) { continue }                                      # same file, same place
+            # Same place, different content: an edited version. Newer = 'A' or 'B', '' when dates match
+            $gap = ($a.Map[$rel].LastWriteTimeUtc - $b.Map[$rel].LastWriteTimeUtc).TotalSeconds
+            $newer = if ([Math]::Abs($gap) -le 2) { '' } elseif ($gap -gt 0) { 'A' } else { 'B' }
+            $different.Add([pscustomobject]@{ Path = $rel; Newer = $newer })
+        } elseif ($byB.ContainsKey($k)) {
+            $elsewhere.Add("A: $rel`n        = B: $($byB[$k][0])")            # same file, kept elsewhere in B
+            $shown[$k] = $true
+        } else {
+            $missingB.Add($rel)
+        }
+    }
+    foreach ($rel in $b.Map.Keys) {
+        $k = $keysB[$rel]
+        if (-not $k -or $a.Map.ContainsKey($rel)) { continue }
+        if ($byA.ContainsKey($k)) {
+            if (-not $shown.ContainsKey($k)) { $elsewhere.Add("B: $rel`n        = A: $($byA[$k][0])") }
+        } else {
+            $missingA.Add($rel)
+        }
+    }
+
     [pscustomobject]@{
         A         = $a
         B         = $b
-        MissingB  = @($a.Map.Keys | Where-Object { -not $b.Map.ContainsKey($_) } | Sort-Object)
-        MissingA  = @($b.Map.Keys | Where-Object { -not $a.Map.ContainsKey($_) } | Sort-Object)
+        MissingB  = @($missingB | Sort-Object)
+        MissingA  = @($missingA | Sort-Object)
         Different = @($different | Sort-Object Path)
-        Errors    = @($a.Errors) + @($b.Errors)
+        Elsewhere = @($elsewhere | Sort-Object)
+        Errors    = @($errors)
     }
 }
 
@@ -271,14 +370,14 @@ function Show-List([string]$title, [string[]]$items, [string]$color, [string]$in
     if ($items.Count -gt $MaxListed) { Say "$indent  ... and $($items.Count - $MaxListed) more" 'DarkGray' }
 }
 
-# Files in both but different, grouped: A Newer, B Newer, Same Date, Different Size
+# Files in both but different, grouped: A Newer, B Newer, Same Date
 function Show-Different([string]$title, $items) {
     Say "  $title ($(@($items).Count))" 'Cyan'
     if (-not @($items).Count) { Say "    none" 'Green'; return }
     $groups = @(
-        @{ Name = 'A Newer';                   Items = @($items | Where-Object { $_.Newer -eq 'A' }) },
-        @{ Name = 'B Newer';                   Items = @($items | Where-Object { $_.Newer -eq 'B' }) },
-        @{ Name = 'Same Date, Different Size'; Items = @($items | Where-Object { -not $_.Newer }) }
+        @{ Name = 'A Newer';                      Items = @($items | Where-Object { $_.Newer -eq 'A' }) },
+        @{ Name = 'B Newer';                      Items = @($items | Where-Object { $_.Newer -eq 'B' }) },
+        @{ Name = 'Same Date, Different Content'; Items = @($items | Where-Object { -not $_.Newer }) }
     )
     foreach ($g in $groups) {
         if (-not $g.Items.Count) { continue }
@@ -306,9 +405,10 @@ function Invoke-Compare {
     Say ""
     Show-List 'MISSING FROM A (ONLY IN B)' $c.MissingA 'Cyan'
     Say ""
-    Show-Different 'IN BOTH BUT DIFFERENT' $c.Different
+    Show-List 'SAME FILE, DIFFERENT PLACE - NOT COPIED, THE OTHER SIDE HAS IT' $c.Elsewhere 'Cyan'
+    Say ""
+    Show-Different 'IN BOTH BUT DIFFERENT (SAME PLACE, DIFFERENT CONTENT)' $c.Different
     Show-Errors $c.Errors
-    if (Show-FolderHint $c) { Say ""; return }
     Say ""
     if (-not $c.MissingA.Count -and -not $c.MissingB.Count -and -not $c.Different.Count) { Say "  DONE - A and B have the same files." 'Green' }
     else { Say "  DONE - 2-4 add the missing files; 5-6 replace older copies with newer ones; 7 does both." 'Green' }
@@ -348,12 +448,9 @@ function Copy-Missing([string]$FromName, [string]$ToName, $Source, [string[]]$Mi
 
 # Scan errors mean the comparison may be incomplete: say so and let the user decide
 function Confirm-Scan($c) {
-    if (Show-FolderHint $c) {
-        if ((Read-MenuKey 'Continue anyway? y/n' 'ynYN') -notin 'y', 'Y') { Say "  Cancelled." 'Yellow'; return $false }
-    }
     if (-not $c.Errors.Count) { return $true }
     Show-Errors $c.Errors
-    Say "  Some items could not be read, so the comparison may be incomplete." 'Yellow'
+    Say "  Some items could not be read, so the comparison may be incomplete. Those files are left alone." 'Yellow'
     if ((Read-MenuKey 'Continue anyway? y/n' 'ynYN') -in 'y', 'Y') { return $true }
     Say "  Cancelled." 'Yellow'
     return $false
@@ -362,6 +459,7 @@ function Confirm-Scan($c) {
 function Invoke-Sync([bool]$AtoB, [bool]$BtoA) {
     $c = Get-Comparison
     if (-not (Confirm-Scan $c)) { return }
+    if ($c.Elsewhere.Count) { Say "  $($c.Elsewhere.Count) file(s) already on the other side in a different folder: not copied (see 1 - Compare)." 'Yellow' }
     if ($AtoB) { Copy-Missing 'A' 'B' $c.A.Map $c.MissingB }
     if ($BtoA) { Copy-Missing 'B' 'A' $c.B.Map $c.MissingA }
 }
@@ -380,7 +478,7 @@ function Invoke-Update([bool]$AtoB, [bool]$BtoA, $c = $null) {
     $other = @($c.Different | Where-Object { (-not $AtoB -and $_.Newer -eq 'A') -or (-not $BtoA -and $_.Newer -eq 'B') })
     Say ""
     if ($tied.Count) {
-        Show-List 'SAME DATE, DIFFERENT SIZE - LEFT ALONE, CHECK THESE YOURSELF' @($tied | ForEach-Object { $_.Path }) 'Yellow'
+        Show-List 'SAME DATE, DIFFERENT CONTENT - LEFT ALONE, CHECK THESE YOURSELF' @($tied | ForEach-Object { $_.Path }) 'Yellow'
         Say ""
     }
     if ($other.Count) {
@@ -424,16 +522,152 @@ function Invoke-Update([bool]$AtoB, [bool]$BtoA, $c = $null) {
 function Invoke-FullSync {
     $c = Get-Comparison
     if (-not (Confirm-Scan $c)) { return }
+    if ($c.Elsewhere.Count) { Say "  $($c.Elsewhere.Count) file(s) already on the other side in a different folder: not copied (see 1 - Compare)." 'Yellow' }
     Copy-Missing 'A' 'B' $c.A.Map $c.MissingB
     Copy-Missing 'B' 'A' $c.B.Map $c.MissingA
     Invoke-Update $true $true $c
 }
 
 # =====================================================================
+#  DUPLICATES: identical files inside one folder; keep the oldest copy
+# =====================================================================
+
+# Local drives (OneDrive included) have a Recycle Bin; network and mapped drives do not
+function Test-RecycleBin([string]$folder) {
+    $root = [IO.Path]::GetPathRoot($folder)
+    if ($root.StartsWith('\\')) { return $false }
+    try { return ((New-Object IO.DriveInfo $root).DriveType -ne 'Network') } catch { return $false }
+}
+
+# Delete through the Windows shell: the only route that behaves on OneDrive folders
+function Remove-ToBin([string]$path, [bool]$bin, [bool]$folder = $false) {
+    $how = if ($bin) { 'SendToRecycleBin' } else { 'DeletePermanently' }
+    if ($folder) { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($path, 'OnlyErrorDialogs', $how) }
+    else         { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($path, 'OnlyErrorDialogs', $how) }
+}
+
+function Invoke-Duplicates([string]$Which) {
+    Confirm-Folders @($Which)
+    $root = $Settings."Folder$Which"
+    Say ""
+    Say "  Reading ${Which}: $root" 'DarkGray'
+    $m = Get-FileMap $root
+    $errors = New-Object System.Collections.Generic.List[string]
+    foreach ($e in $m.Errors) { $errors.Add($e) }
+
+    # Only files that share a name and size with another file in the folder are read
+    $ix = Get-NameSizeIndex $m.Map
+    $toRead = New-Object System.Collections.Generic.List[object]
+    foreach ($k in $ix.Keys) {
+        if ($ix[$k].Count -lt 2) { continue }
+        foreach ($rel in $ix[$k]) { $toRead.Add($m.Map[$rel]) }
+    }
+    $hashes = Read-Contents $toRead $errors
+
+    $groups = @{}
+    foreach ($f in $toRead) {
+        $k = $hashes[$f.FullName]
+        if (-not $k) { continue }
+        if (-not $groups.ContainsKey($k)) { $groups[$k] = New-Object System.Collections.Generic.List[object] }
+        $groups[$k].Add($f)
+    }
+    # In each group keep the copy that was there first (creation date), then the shortest path
+    $todo = New-Object System.Collections.Generic.List[object]
+    $bytes = [long]0
+    foreach ($k in $groups.Keys) {
+        if ($groups[$k].Count -lt 2) { continue }
+        $sorted = @($groups[$k] | Sort-Object CreationTimeUtc, { $_.FullName.Length }, FullName)
+        $keep = $sorted[0]
+        foreach ($f in $sorted[1..($sorted.Count - 1)]) {
+            $todo.Add([pscustomobject]@{ File = $f; Keep = $keep; Rel = $f.FullName.Substring($root.Length).TrimStart('\'); KeepRel = $keep.FullName.Substring($root.Length).TrimStart('\') })
+            $bytes += $f.Length
+        }
+    }
+    $todo = @($todo | Sort-Object Rel)
+    $groupCount = @($groups.Keys | Where-Object { $groups[$_].Count -gt 1 }).Count
+    Show-Errors $errors
+    Say ""
+    Say "  $Which has $($m.Map.Count) file(s)." 'White'
+    if (-not $todo.Count) { Say "  DONE - no duplicates in $Which." 'Green'; return }
+
+    Say ""
+    Say "  DUPLICATES IN $Which ($groupCount file(s) exist more than once, $($todo.Count) extra cop$(if ($todo.Count -eq 1) { 'y' } else { 'ies' }), $(Format-Size $bytes))" 'Cyan'
+    Say "  TO DELETE   the copy being kept is shown after =" 'Cyan'
+    $todo | Select-Object -First $MaxListed | ForEach-Object {
+        Say "    $($_.Rel)" 'White'
+        Say "      = $($_.KeepRel)" 'DarkGray'
+    }
+    if ($todo.Count -gt $MaxListed) { Say "    ... and $($todo.Count - $MaxListed) more" 'DarkGray' }
+    Say ""
+
+    $bin = Test-RecycleBin $root
+    if ($bin) {
+        if ((Read-MenuKey "Send $($todo.Count) file(s) to the Recycle Bin? y/n" 'ynYN') -notin 'y', 'Y') { Say "  Skipped." 'Yellow'; return }
+    } else {
+        Say "  NO RECYCLE BIN ON THIS DRIVE - DELETING HERE IS PERMANENT AND CANNOT BE UNDONE." 'Red'
+        if ((Read-Host "  Type yes to delete $($todo.Count) file(s) permanently, anything else to skip").Trim() -ne 'yes') { Say "  Skipped." 'Yellow'; return }
+    }
+
+    Add-Type -AssemblyName Microsoft.VisualBasic
+    $done = 0; $n = 0
+    $failed = New-Object System.Collections.Generic.List[string]
+    $dirs = @{}
+    foreach ($d in $todo) {
+        $n++
+        try {
+            Say "    [$n/$($todo.Count)] $($d.Rel)" 'DarkGray'
+            Remove-ToBin $d.File.FullName $bin
+            $dirs[$d.File.DirectoryName] = $true
+            $done++
+        } catch {
+            $failed.Add("$($d.Rel): $($_.Exception.Message)")
+        }
+    }
+    # Folders left empty by the deletes go too, walking up but never past the folder itself
+    $removed = 0
+    foreach ($dir in @($dirs.Keys | Sort-Object { $_.Length } -Descending)) {
+        $cur = $dir
+        while ($cur.Length -gt $root.Length -and $cur.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+            try {
+                if (-not [IO.Directory]::Exists($cur)) { break }
+                if (@([IO.Directory]::EnumerateFileSystemEntries($cur) | Select-Object -First 1).Count) { break }
+                Remove-ToBin $cur $bin $true
+                $removed++
+            } catch { break }
+            $cur = [IO.Path]::GetDirectoryName($cur)
+        }
+    }
+    $where = if ($bin) { 'sent to the Recycle Bin' } else { 'deleted' }
+    Say "  DONE - $done of $($todo.Count) $where$(if ($removed) { ", $removed empty folder(s) removed" })" $(if ($failed.Count) { 'Yellow' } else { 'Green' })
+    Show-Errors $failed
+}
+
+function Show-Duplicates {
+    $a = if ($Settings.FolderA) { $Settings.FolderA } else { 'not set' }
+    $b = if ($Settings.FolderB) { $Settings.FolderB } else { 'not set' }
+    Say ""
+    Say "  ---------------- DUPLICATES -----------------" 'Cyan'
+    Say "    A  $a" 'DarkGray'
+    Say "    B  $b" 'DarkGray'
+    Say ""
+    Say "    1  -  Find in A" 'White'
+    Say "    2  -  Find in B" 'White'
+    Say "    3  -  Back" 'White'
+    Say "    0  -  Quit" 'White'
+    Say ""
+    switch (Read-MenuKey 'Choose 0-3' '0123') {
+        '1' { Invoke-Duplicates 'A' }
+        '2' { Invoke-Duplicates 'B' }
+        '3' { return 'back' }
+        '0' { return 'quit' }
+    }
+}
+
+# =====================================================================
 #  MENU
 # =====================================================================
 Clear-Host
-$last = ''
+$last = ''; $quit = $false
 while ($true) {
     $a = if ($Settings.FolderA) { $Settings.FolderA } else { 'not set' }
     $b = if ($Settings.FolderB) { $Settings.FolderB } else { 'not set' }
@@ -451,30 +685,32 @@ while ($true) {
     Say "    5  -  Replace older A -> B" 'White'
     Say "    6  -  Replace older B -> A" 'White'
     Say "    7  -  Full sync" 'White'
-    Say "    8  -  Settings" 'White'
+    Say "    8  -  Duplicates" 'White'
+    Say "    9  -  Settings" 'White'
     Say "    0  -  Quit" 'White'
     Say ""
-    $choice = Read-MenuKey 'Choose 0-8' '012345678' $last
+    $choice = Read-MenuKey 'Choose 0-9' '0123456789' $last
     if ($choice -eq '0') { break }
-    if ($choice -eq '8') {
+    if ($choice -eq '9') {
         if (@(Show-Settings) -contains 'quit') { break }
         Clear-Host
         continue
     }
     try {
-        Confirm-Folders
         switch ($choice) {
-            '1' { Invoke-Compare }
-            '2' { Invoke-Sync $true  $false }
-            '3' { Invoke-Sync $false $true }
-            '4' { Invoke-Sync $true  $true }
-            '5' { Invoke-Update $true  $false }
-            '6' { Invoke-Update $false $true }
-            '7' { Invoke-FullSync }
+            '1' { Confirm-Folders; Invoke-Compare }
+            '2' { Confirm-Folders; Invoke-Sync $true  $false }
+            '3' { Confirm-Folders; Invoke-Sync $false $true }
+            '4' { Confirm-Folders; Invoke-Sync $true  $true }
+            '5' { Confirm-Folders; Invoke-Update $true  $false }
+            '6' { Confirm-Folders; Invoke-Update $false $true }
+            '7' { Confirm-Folders; Invoke-FullSync }
+            '8' { if (@(Show-Duplicates) -contains 'quit') { $quit = $true } }
         }
     } catch {
         Say "  FAILED: $($_.Exception.Message)" 'Red'
     }
+    if ($quit) { break }
     $last = $choice
     Say ""
 }
