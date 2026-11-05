@@ -235,16 +235,27 @@ function Get-Comparison {
     }
 }
 
-# "<path>  (A newer)" lines for the Different list
-function Format-Different($items) {
-    @($items | ForEach-Object { "$($_.Path)  ($(if ($_.Newer) { "$($_.Newer) newer" } else { 'same date, different size' }))" })
+function Show-List([string]$title, [string[]]$items, [string]$color, [string]$indent = '  ') {
+    Say "$indent$title ($($items.Count))" $color
+    if (-not $items.Count) { Say "$indent  none" 'Green'; return }
+    $items | Select-Object -First $MaxListed | ForEach-Object { Say "$indent  $_" 'White' }
+    if ($items.Count -gt $MaxListed) { Say "$indent  ... and $($items.Count - $MaxListed) more" 'DarkGray' }
 }
 
-function Show-List([string]$title, [string[]]$items, [string]$color) {
-    Say "  $title ($($items.Count))" $color
-    if (-not $items.Count) { Say "    none" 'Green'; return }
-    $items | Select-Object -First $MaxListed | ForEach-Object { Say "    $_" 'White' }
-    if ($items.Count -gt $MaxListed) { Say "    ... and $($items.Count - $MaxListed) more" 'DarkGray' }
+# Files in both but different, grouped: A Newer, B Newer, Same Date, Different Size
+function Show-Different([string]$title, $items) {
+    Say "  $title ($(@($items).Count))" 'Cyan'
+    if (-not @($items).Count) { Say "    none" 'Green'; return }
+    $groups = @(
+        @{ Name = 'A Newer';                   Items = @($items | Where-Object { $_.Newer -eq 'A' }) },
+        @{ Name = 'B Newer';                   Items = @($items | Where-Object { $_.Newer -eq 'B' }) },
+        @{ Name = 'Same Date, Different Size'; Items = @($items | Where-Object { -not $_.Newer }) }
+    )
+    foreach ($g in $groups) {
+        if (-not $g.Items.Count) { continue }
+        Say ""
+        Show-List $g.Name @($g.Items | ForEach-Object { $_.Path }) 'White' '    '
+    }
 }
 
 function Show-Errors([string[]]$errors) {
@@ -262,11 +273,11 @@ function Invoke-Compare {
     Say ""
     Say "  A: $($c.A.Map.Count) file(s)    B: $($c.B.Map.Count) file(s)" 'White'
     Say ""
-    Show-List 'Missing from B (only in A)' $c.MissingB 'Cyan'
+    Show-List 'MISSING FROM B (ONLY IN A)' $c.MissingB 'Cyan'
     Say ""
-    Show-List 'Missing from A (only in B)' $c.MissingA 'Cyan'
+    Show-List 'MISSING FROM A (ONLY IN B)' $c.MissingA 'Cyan'
     Say ""
-    Show-List 'In both but different' (Format-Different $c.Different) 'Cyan'
+    Show-Different 'IN BOTH BUT DIFFERENT' $c.Different
     Show-Errors $c.Errors
     Say ""
     if (-not $c.MissingA.Count -and -not $c.MissingB.Count -and -not $c.Different.Count) { Say "  DONE - A and B have the same files." 'Green' }
@@ -282,7 +293,7 @@ function Copy-Missing([string]$FromName, [string]$ToName, $Source, [string[]]$Mi
     $to = $Settings."Folder$ToName"
     Say ""
     if (-not $Missing.Count) { Say "  $FromName -> ${ToName}: nothing to copy, $ToName already has every file in $FromName." 'Green'; return }
-    Show-List "$FromName -> ${ToName}: files to copy" $Missing 'Cyan'
+    Show-List "$FromName -> ${ToName}: FILES TO COPY" $Missing 'Cyan'
     Say ""
     if ((Read-MenuKey "Copy $($Missing.Count) file(s) into Folder ${ToName}? y/n" 'ynYN') -notin 'y', 'Y') { Say "  Skipped." 'Yellow'; return }
 
@@ -334,7 +345,7 @@ function Invoke-Update([bool]$AtoB, [bool]$BtoA) {
     $other = @($c.Different | Where-Object { (-not $AtoB -and $_.Newer -eq 'A') -or (-not $BtoA -and $_.Newer -eq 'B') })
     Say ""
     if ($tied.Count) {
-        Show-List 'Same date but different size - left alone, check these yourself' (Format-Different $tied) 'Yellow'
+        Show-List 'SAME DATE, DIFFERENT SIZE - LEFT ALONE, CHECK THESE YOURSELF' @($tied | ForEach-Object { $_.Path }) 'Yellow'
         Say ""
     }
     if ($other.Count) {
@@ -343,7 +354,7 @@ function Invoke-Update([bool]$AtoB, [bool]$BtoA) {
         Say ""
     }
     if (-not $todo.Count) { Say "  Nothing to update." 'Green'; return }
-    Show-List 'Older copies to replace with the newer version' (Format-Different $todo) 'Cyan'
+    Show-Different 'OLDER COPIES TO REPLACE WITH THE NEWER VERSION' $todo
     Say ""
     if ((Read-MenuKey "Replace $($todo.Count) older file(s)? y/n" 'ynYN') -notin 'y', 'Y') { Say "  Skipped." 'Yellow'; return }
 
