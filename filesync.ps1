@@ -1,0 +1,356 @@
+# irm https://github.com/therepos/windows/raw/main/filesync.ps1 | iex
+# Purpose: Compare two folders and copy the files missing from either side, one way or both
+# =============================================================================
+#  File Sync:
+#   1 = Compare   count the files in A and B and list what is missing from each
+#   2 = A -> B    copy the files missing from B
+#   3 = B -> A    copy the files missing from A
+#   4 = Both      copy both ways so A and B end up with the same files
+#   5 = Settings  Folder A, Folder B (kept between runs) and the 'filesync'
+#                 shortcut, which runs a local copy in %LOCALAPPDATA%\filesync
+#   0 = Quit      closes this window
+#  Files match by relative path and name. Existing files are never replaced or
+#  deleted, so a file that differs on both sides stays as it is on each.
+#  OneDrive / SharePoint folders work too; online-only files are downloaded
+#  when copied. Local, network and mapped drives are fine.
+#  One keypress picks an option (no Enter). After each action the menu comes
+#  back with the last action as the default, so Enter repeats it.
+#  Folders are asked on first use, then remembered. No admin, no downloads.
+# =============================================================================
+
+$ToolDir      = Join-Path $env:LOCALAPPDATA 'filesync'
+$SettingsFile = Join-Path $ToolDir 'settings.json'
+$ScriptUrl    = 'https://github.com/therepos/windows/raw/main/filesync.ps1'
+$MaxListed    = 40                      # lines shown per list before "... and N more"
+
+$ErrorActionPreference = 'Stop'
+$ProgressPreference    = 'SilentlyContinue'
+
+function Say($msg, $color = 'Gray') { Write-Host $msg -ForegroundColor $color }
+
+# =====================================================================
+#  INPUT HELPERS
+# =====================================================================
+
+# Test-Path that never prints an error, e.g. for text that is not one path ("a" "b")
+function Test-PathQuiet([string]$path, [string]$type = 'Any') {
+    if (-not $path) { return $false }
+    try { Test-Path -LiteralPath $path -PathType $type -ErrorAction Stop } catch { $false }
+}
+
+# One keypress picks a menu option (no Enter needed); Enter picks the default, if any
+function Read-MenuKey([string]$Prompt, [string]$Valid, [string]$Default = '') {
+    Write-Host "  $Prompt$(if ($Default) { " [$Default]" }): " -NoNewline
+    while ($true) {
+        try {
+            $k = [Console]::ReadKey($true)
+            $c = if ($k.Key -eq 'Enter') { $Default } else { "$($k.KeyChar)" }
+        } catch {
+            # No keyboard (input redirected): fall back to a typed line
+            $line = [Console]::ReadLine()
+            if ($null -eq $line) { throw 'No keyboard input available' }
+            $c = $line.Trim(); if (-not $c) { $c = $Default }
+        }
+        if ($c.Length -eq 1 -and $Valid.Contains($c)) {
+            Write-Host $c
+            # Swallow an Enter typed out of habit so it does not reach the next prompt
+            Start-Sleep -Milliseconds 300
+            try { while ([Console]::KeyAvailable) { [void][Console]::ReadKey($true) } } catch {}
+            return $c
+        }
+    }
+}
+
+# Typed or dragged folder -> full path without a trailing slash, or $null (reason shown)
+function Resolve-Folder([string]$answer) {
+    $path = [Environment]::ExpandEnvironmentVariables($answer.Trim().Trim('"').Trim("'"))
+    if ($path -match '^[A-Za-z]:$') { $path += '\' }
+    if (-not (Test-PathQuiet $path 'Container')) {
+        Say "  Cannot open '$path'. Check the path, or that OneDrive is signed in." 'Red'
+        return $null
+    }
+    try { Get-ChildItem -LiteralPath $path -Force -ErrorAction Stop | Select-Object -First 1 | Out-Null }
+    catch { Say "  Cannot read '$path': $($_.Exception.Message)" 'Red'; return $null }
+    $p = (Resolve-Path -LiteralPath $path).ProviderPath
+    if ($p.Length -gt 3) { $p = $p.TrimEnd('\') }
+    return $p
+}
+
+# True when the two folders are the same or one is inside the other
+function Test-Overlap([string]$a, [string]$b) {
+    if (-not $a -or -not $b) { return $false }
+    $a = $a.TrimEnd('\') + '\'
+    $b = $b.TrimEnd('\') + '\'
+    $a.StartsWith($b, [StringComparison]::OrdinalIgnoreCase) -or $b.StartsWith($a, [StringComparison]::OrdinalIgnoreCase)
+}
+
+# =====================================================================
+#  SETTINGS  (%LOCALAPPDATA%\filesync\settings.json)
+# =====================================================================
+function Import-Settings {
+    $s = [pscustomobject]@{ FolderA = $null; FolderB = $null }
+    try {
+        $saved = Get-Content -LiteralPath $SettingsFile -Raw -ErrorAction Stop | ConvertFrom-Json
+        if ($saved.FolderA) { $s.FolderA = [string]$saved.FolderA }
+        if ($saved.FolderB) { $s.FolderB = [string]$saved.FolderB }
+    } catch {}
+    return $s
+}
+
+function Export-Settings {
+    New-Item -ItemType Directory -Path $ToolDir -Force | Out-Null
+    $Settings | ConvertTo-Json | Set-Content -LiteralPath $SettingsFile -Encoding UTF8
+}
+
+function Set-FolderSetting([string]$Which) {
+    $current = $Settings."Folder$Which"
+    $other   = if ($Which -eq 'A') { $Settings.FolderB } else { $Settings.FolderA }
+    Say ""
+    Say "  Folder ${Which}: type or drag it here (a drive like Z:\ works too)." 'Cyan'
+    while ($true) {
+        $answer = Read-Host "  Folder $Which$(if ($current) { " [$current]" })"
+        if ([string]::IsNullOrWhiteSpace($answer)) {
+            if ($current) { Say "  Folder ${Which}: $current" 'Gray'; return }
+            continue
+        }
+        $p = Resolve-Folder $answer
+        if (-not $p) { continue }
+        if (Test-Overlap $p $other) {
+            Say "  Folder A and Folder B must be separate folders, not one inside the other." 'Red'
+            continue
+        }
+        $Settings."Folder$Which" = $p
+        Say "  Folder ${Which}: $p" 'Green'
+        return
+    }
+}
+
+# Both folders must be set (asked on first use) and reachable right now
+function Confirm-Folders {
+    foreach ($w in 'A', 'B') {
+        $cur = $Settings."Folder$w"
+        if ($cur -and (Test-PathQuiet $cur 'Container')) { continue }
+        if ($cur) { Say "  Folder $w is not available right now: $cur" 'Yellow' }
+        Set-FolderSetting $w
+        Export-Settings
+    }
+}
+
+# Optional one-word shortcut: typing `filesync` in any new PowerShell window runs a local copy
+# of this script saved in %LOCALAPPDATA%\filesync (nothing is fetched from the internet)
+$ScriptFile   = $PSCommandPath
+$LocalScript  = Join-Path $ToolDir 'filesync.ps1'
+$ShortcutLine = 'function filesync { & "$env:LOCALAPPDATA\filesync\filesync.ps1" }'
+
+function Test-Shortcut {
+    (Test-Path -LiteralPath $PROFILE) -and (Test-Path -LiteralPath $LocalScript) -and
+        (@(Get-Content -LiteralPath $PROFILE -ErrorAction SilentlyContinue) -contains $ShortcutLine)
+}
+
+function Switch-Shortcut {
+    try {
+        $on = Test-Shortcut
+        if (Test-Path -LiteralPath $PROFILE) {
+            @(Get-Content -LiteralPath $PROFILE) | Where-Object { $_ -notmatch '^function filesync ' } | Set-Content -LiteralPath $PROFILE
+        }
+        if ($on) {
+            Remove-Item -LiteralPath $LocalScript -Force -ErrorAction SilentlyContinue
+            Say "  Shortcut removed." 'Green'
+            return
+        }
+        New-Item -ItemType Directory -Path $ToolDir -Force | Out-Null
+        if ($ScriptFile -and (Test-Path -LiteralPath $ScriptFile)) {
+            if ($ScriptFile -ne $LocalScript) { Copy-Item -LiteralPath $ScriptFile -Destination $LocalScript -Force }
+        } else {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $ScriptUrl -OutFile $LocalScript -UseBasicParsing
+        }
+        Unblock-File -LiteralPath $LocalScript -ErrorAction SilentlyContinue
+        if ((Get-ExecutionPolicy -Scope CurrentUser) -in 'Undefined', 'Restricted', 'AllSigned') {
+            Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
+        }
+        if (-not (Test-Path -LiteralPath $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
+        Add-Content -LiteralPath $PROFILE "`n$ShortcutLine"
+        Say "  Shortcut added. In a new PowerShell window, just type: filesync" 'Green'
+    } catch {
+        Say "  Could not change the shortcut: $($_.Exception.Message)" 'Red'
+    }
+}
+
+function Show-Settings {
+    while ($true) {
+        $a     = if ($Settings.FolderA) { $Settings.FolderA } else { 'not set' }
+        $b     = if ($Settings.FolderB) { $Settings.FolderB } else { 'not set' }
+        $short = if (Test-Shortcut) { 'on' } else { 'off' }
+        Say ""
+        Say "  ---------------- SETTINGS -------------------" 'Cyan'
+        Say ""
+        Say "    1  -  Set Folder A           [$a]" 'White'
+        Say "    2  -  Set Folder B           [$b]" 'White'
+        Say "    3  -  Shortcut 'filesync'    [$short]" 'White'
+        Say "    4  -  Back" 'White'
+        Say "    0  -  Quit" 'White'
+        Say ""
+        switch (Read-MenuKey 'Choose 0-4' '01234') {
+            '1' { Set-FolderSetting 'A'; Export-Settings }
+            '2' { Set-FolderSetting 'B'; Export-Settings }
+            '3' { Switch-Shortcut }
+            '4' { return 'back' }
+            '0' { return 'quit' }
+        }
+    }
+}
+
+# =====================================================================
+#  COMPARE
+# =====================================================================
+
+# Every file under $Root keyed by relative path (case-insensitive); unreadable items go to Errors
+function Get-FileMap([string]$Root) {
+    $map    = [System.Collections.Generic.Dictionary[string,object]]::new([StringComparer]::OrdinalIgnoreCase)
+    $errors = New-Object System.Collections.Generic.List[string]
+    $scanErrors = @()
+    $items = @(Get-ChildItem -LiteralPath $Root -File -Recurse -Force -ErrorAction SilentlyContinue -ErrorVariable scanErrors)
+    foreach ($f in $items) {
+        $rel = $f.FullName.Substring($Root.Length).TrimStart('\')
+        if (-not $map.ContainsKey($rel)) { $map.Add($rel, $f) }
+    }
+    foreach ($e in $scanErrors) { $errors.Add("$($e.TargetObject): $($e.Exception.Message)") }
+    [pscustomobject]@{ Map = $map; Errors = $errors }
+}
+
+function Get-Comparison {
+    Say ""
+    Say "  Reading A: $($Settings.FolderA)" 'DarkGray'
+    $a = Get-FileMap $Settings.FolderA
+    Say "  Reading B: $($Settings.FolderB)" 'DarkGray'
+    $b = Get-FileMap $Settings.FolderB
+    [pscustomobject]@{
+        A        = $a
+        B        = $b
+        MissingB = @($a.Map.Keys | Where-Object { -not $b.Map.ContainsKey($_) } | Sort-Object)
+        MissingA = @($b.Map.Keys | Where-Object { -not $a.Map.ContainsKey($_) } | Sort-Object)
+        Errors   = @($a.Errors) + @($b.Errors)
+    }
+}
+
+function Show-List([string]$title, [string[]]$items, [string]$color) {
+    Say "  $title ($($items.Count))" $color
+    if (-not $items.Count) { Say "    none" 'Green'; return }
+    $items | Select-Object -First $MaxListed | ForEach-Object { Say "    $_" 'White' }
+    if ($items.Count -gt $MaxListed) { Say "    ... and $($items.Count - $MaxListed) more" 'DarkGray' }
+}
+
+function Show-Errors([string[]]$errors) {
+    if (-not $errors.Count) { return }
+    Say ""
+    Say "  $($errors.Count) item(s) could not be read:" 'Yellow'
+    $errors | Select-Object -First 10 | ForEach-Object { Say "    $_" 'Yellow' }
+    if ($errors.Count -gt 10) { Say "    ... and $($errors.Count - 10) more" 'DarkGray' }
+    Say "  Usual fixes: close the file if it is open, check the folder opens in File Explorer," 'DarkGray'
+    Say "  or for OneDrive files choose 'Always keep on this device'." 'DarkGray'
+}
+
+function Invoke-Compare {
+    $c = Get-Comparison
+    Say ""
+    Say "  A: $($c.A.Map.Count) file(s)    B: $($c.B.Map.Count) file(s)" 'White'
+    Say ""
+    Show-List 'Missing from B (only in A)' $c.MissingB 'Cyan'
+    Say ""
+    Show-List 'Missing from A (only in B)' $c.MissingA 'Cyan'
+    Show-Errors $c.Errors
+    Say ""
+    if (-not $c.MissingA.Count -and -not $c.MissingB.Count) { Say "  DONE - A and B have the same files." 'Green' }
+    else { Say "  DONE - use 2, 3 or 4 to copy the missing files." 'Green' }
+}
+
+# =====================================================================
+#  COPY
+# =====================================================================
+
+# Copy the files in $Missing from $Source into Folder $ToName; nothing there is ever replaced
+function Copy-Missing([string]$FromName, [string]$ToName, $Source, [string[]]$Missing) {
+    $to = $Settings."Folder$ToName"
+    Say ""
+    if (-not $Missing.Count) { Say "  $FromName -> ${ToName}: nothing to copy, $ToName already has every file in $FromName." 'Green'; return }
+    Show-List "$FromName -> ${ToName}: files to copy" $Missing 'Cyan'
+    Say ""
+    if ((Read-MenuKey "Copy $($Missing.Count) file(s) into Folder ${ToName}? y/n" 'ynYN') -notin 'y', 'Y') { Say "  Skipped." 'Yellow'; return }
+
+    $copied = 0; $n = 0
+    $failed = New-Object System.Collections.Generic.List[string]
+    foreach ($rel in $Missing) {
+        $n++
+        try {
+            $dst = [IO.Path]::Combine($to, $rel)
+            [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($dst)) | Out-Null
+            if ([IO.File]::Exists($dst)) { continue }        # appeared meanwhile: never replace
+            Say "    [$n/$($Missing.Count)] $rel" 'DarkGray'
+            [IO.File]::Copy($Source[$rel].FullName, $dst, $false)
+            $copied++
+        } catch {
+            $failed.Add("${rel}: $($_.Exception.Message)")
+        }
+    }
+    Say "  DONE - $copied of $($Missing.Count) copied into Folder $ToName" $(if ($failed.Count) { 'Yellow' } else { 'Green' })
+    Show-Errors $failed
+}
+
+function Invoke-Sync([bool]$AtoB, [bool]$BtoA) {
+    $c = Get-Comparison
+    if ($c.Errors.Count) {
+        Show-Errors $c.Errors
+        Say "  Some items could not be read, so the comparison may be incomplete." 'Yellow'
+        if ((Read-MenuKey 'Continue anyway? y/n' 'ynYN') -notin 'y', 'Y') { Say "  Cancelled." 'Yellow'; return }
+    }
+    if ($AtoB) { Copy-Missing 'A' 'B' $c.A.Map $c.MissingB }
+    if ($BtoA) { Copy-Missing 'B' 'A' $c.B.Map $c.MissingA }
+}
+
+# =====================================================================
+#  MENU
+# =====================================================================
+Clear-Host
+$Settings = Import-Settings
+$last     = ''
+while ($true) {
+    $a = if ($Settings.FolderA) { $Settings.FolderA } else { 'not set' }
+    $b = if ($Settings.FolderB) { $Settings.FolderB } else { 'not set' }
+    Say ""
+    Say "  =============================================" 'Cyan'
+    Say "        FILE SYNC" 'Cyan'
+    Say "  =============================================" 'Cyan'
+    Say "    A  $a" 'DarkGray'
+    Say "    B  $b" 'DarkGray'
+    Say ""
+    Say "    1  -  Compare" 'White'
+    Say "    2  -  Copy A -> B" 'White'
+    Say "    3  -  Copy B -> A" 'White'
+    Say "    4  -  Copy both ways" 'White'
+    Say "    5  -  Settings" 'White'
+    Say "    0  -  Quit" 'White'
+    Say ""
+    $choice = Read-MenuKey 'Choose 0-5' '012345' $last
+    if ($choice -eq '0') { break }
+    if ($choice -eq '5') {
+        if (@(Show-Settings) -contains 'quit') { break }
+        Clear-Host
+        continue
+    }
+    try {
+        Confirm-Folders
+        switch ($choice) {
+            '1' { Invoke-Compare }
+            '2' { Invoke-Sync $true  $false }
+            '3' { Invoke-Sync $false $true }
+            '4' { Invoke-Sync $true  $true }
+        }
+    } catch {
+        Say "  FAILED: $($_.Exception.Message)" 'Red'
+    }
+    $last = $choice
+    Say ""
+}
+# Quit closes this window, not just the menu (errors above skip this and leave it open)
+[Environment]::Exit(0)
