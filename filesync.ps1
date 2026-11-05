@@ -6,11 +6,14 @@
 #   2 = A -> B    copy the files missing from B
 #   3 = B -> A    copy the files missing from A
 #   4 = Both      copy both ways so A and B end up with the same files
-#   5 = Settings  Folder A, Folder B (kept between runs) and the 'filesync'
+#   5 = Update    files on both sides that differ: replace the older copy
+#                 with the newer one (same date but different size: left alone)
+#   6 = Settings  Folder A, Folder B (kept between runs) and the 'filesync'
 #                 shortcut, which runs a local copy in %LOCALAPPDATA%\filesync
 #   0 = Quit      closes this window
-#  Files match by relative path and name. Existing files are never replaced or
-#  deleted, so a file that differs on both sides stays as it is on each.
+#  Files match by relative path and name. Nothing is ever deleted. Options 2-4
+#  never replace a file; only Update does, and only an older copy with a newer
+#  one, after showing the list and asking.
 #  OneDrive / SharePoint folders work too; online-only files are downloaded
 #  when copied. Local, network and mapped drives are fine.
 #  One keypress picks an option (no Enter). After each action the menu comes
@@ -225,13 +228,28 @@ function Get-Comparison {
     $a = Get-FileMap $Settings.FolderA
     Say "  Reading B: $($Settings.FolderB)" 'DarkGray'
     $b = Get-FileMap $Settings.FolderB
-    [pscustomobject]@{
-        A        = $a
-        B        = $b
-        MissingB = @($a.Map.Keys | Where-Object { -not $b.Map.ContainsKey($_) } | Sort-Object)
-        MissingA = @($b.Map.Keys | Where-Object { -not $a.Map.ContainsKey($_) } | Sort-Object)
-        Errors   = @($a.Errors) + @($b.Errors)
+    # In both, but not the same file: Newer = 'A' or 'B', or '' when the dates match (size differs)
+    $different = foreach ($k in $a.Map.Keys) {
+        if (-not $b.Map.ContainsKey($k)) { continue }
+        $fa = $a.Map[$k]; $fb = $b.Map[$k]
+        $gap = ($fa.LastWriteTimeUtc - $fb.LastWriteTimeUtc).TotalSeconds
+        if ($fa.Length -eq $fb.Length -and [Math]::Abs($gap) -le 2) { continue }
+        $newer = if ([Math]::Abs($gap) -le 2) { '' } elseif ($gap -gt 0) { 'A' } else { 'B' }
+        [pscustomobject]@{ Path = $k; Newer = $newer }
     }
+    [pscustomobject]@{
+        A         = $a
+        B         = $b
+        MissingB  = @($a.Map.Keys | Where-Object { -not $b.Map.ContainsKey($_) } | Sort-Object)
+        MissingA  = @($b.Map.Keys | Where-Object { -not $a.Map.ContainsKey($_) } | Sort-Object)
+        Different = @($different | Sort-Object Path)
+        Errors    = @($a.Errors) + @($b.Errors)
+    }
+}
+
+# "<path>  (A newer)" lines for the Different list
+function Format-Different($items) {
+    @($items | ForEach-Object { "$($_.Path)  ($(if ($_.Newer) { "$($_.Newer) newer" } else { 'same date, different size' }))" })
 }
 
 function Show-List([string]$title, [string[]]$items, [string]$color) {
@@ -259,10 +277,12 @@ function Invoke-Compare {
     Show-List 'Missing from B (only in A)' $c.MissingB 'Cyan'
     Say ""
     Show-List 'Missing from A (only in B)' $c.MissingA 'Cyan'
+    Say ""
+    Show-List 'In both but different' (Format-Different $c.Different) 'Cyan'
     Show-Errors $c.Errors
     Say ""
-    if (-not $c.MissingA.Count -and -not $c.MissingB.Count) { Say "  DONE - A and B have the same files." 'Green' }
-    else { Say "  DONE - use 2, 3 or 4 to copy the missing files." 'Green' }
+    if (-not $c.MissingA.Count -and -not $c.MissingB.Count -and -not $c.Different.Count) { Say "  DONE - A and B have the same files." 'Green' }
+    else { Say "  DONE - 2, 3 or 4 copies the missing files; 5 replaces older copies with newer ones." 'Green' }
 }
 
 # =====================================================================
@@ -297,15 +317,57 @@ function Copy-Missing([string]$FromName, [string]$ToName, $Source, [string[]]$Mi
     Show-Errors $failed
 }
 
+# Scan errors mean the comparison may be incomplete: say so and let the user decide
+function Confirm-Scan($c) {
+    if (-not $c.Errors.Count) { return $true }
+    Show-Errors $c.Errors
+    Say "  Some items could not be read, so the comparison may be incomplete." 'Yellow'
+    if ((Read-MenuKey 'Continue anyway? y/n' 'ynYN') -in 'y', 'Y') { return $true }
+    Say "  Cancelled." 'Yellow'
+    return $false
+}
+
 function Invoke-Sync([bool]$AtoB, [bool]$BtoA) {
     $c = Get-Comparison
-    if ($c.Errors.Count) {
-        Show-Errors $c.Errors
-        Say "  Some items could not be read, so the comparison may be incomplete." 'Yellow'
-        if ((Read-MenuKey 'Continue anyway? y/n' 'ynYN') -notin 'y', 'Y') { Say "  Cancelled." 'Yellow'; return }
-    }
+    if (-not (Confirm-Scan $c)) { return }
     if ($AtoB) { Copy-Missing 'A' 'B' $c.A.Map $c.MissingB }
     if ($BtoA) { Copy-Missing 'B' 'A' $c.B.Map $c.MissingA }
+}
+
+# =====================================================================
+#  UPDATE: replace the older of two differing copies with the newer one
+# =====================================================================
+function Invoke-Update {
+    $c = Get-Comparison
+    if (-not (Confirm-Scan $c)) { return }
+    $todo = @($c.Different | Where-Object { $_.Newer })
+    $tied = @($c.Different | Where-Object { -not $_.Newer })
+    Say ""
+    if ($tied.Count) {
+        Show-List 'Same date but different size - left alone, check these yourself' (Format-Different $tied) 'Yellow'
+        Say ""
+    }
+    if (-not $todo.Count) { Say "  Nothing to update." 'Green'; return }
+    Show-List 'Older copies to replace with the newer version' (Format-Different $todo) 'Cyan'
+    Say ""
+    if ((Read-MenuKey "Replace $($todo.Count) older file(s)? y/n" 'ynYN') -notin 'y', 'Y') { Say "  Skipped." 'Yellow'; return }
+
+    $done = 0; $n = 0
+    $failed = New-Object System.Collections.Generic.List[string]
+    foreach ($d in $todo) {
+        $n++
+        try {
+            $src = $(if ($d.Newer -eq 'A') { $c.A.Map } else { $c.B.Map })[$d.Path].FullName
+            $dst = $(if ($d.Newer -eq 'A') { $c.B.Map } else { $c.A.Map })[$d.Path].FullName
+            Say "    [$n/$($todo.Count)] $($d.Path)  ($($d.Newer) -> $(if ($d.Newer -eq 'A') { 'B' } else { 'A' }))" 'DarkGray'
+            [IO.File]::Copy($src, $dst, $true)
+            $done++
+        } catch {
+            $failed.Add("$($d.Path): $($_.Exception.Message)")
+        }
+    }
+    Say "  DONE - $done of $($todo.Count) updated" $(if ($failed.Count) { 'Yellow' } else { 'Green' })
+    Show-Errors $failed
 }
 
 # =====================================================================
@@ -328,12 +390,13 @@ while ($true) {
     Say "    2  -  Copy A -> B" 'White'
     Say "    3  -  Copy B -> A" 'White'
     Say "    4  -  Copy both ways" 'White'
-    Say "    5  -  Settings" 'White'
+    Say "    5  -  Update older with newer" 'White'
+    Say "    6  -  Settings" 'White'
     Say "    0  -  Quit" 'White'
     Say ""
-    $choice = Read-MenuKey 'Choose 0-5' '012345' $last
+    $choice = Read-MenuKey 'Choose 0-6' '0123456' $last
     if ($choice -eq '0') { break }
-    if ($choice -eq '5') {
+    if ($choice -eq '6') {
         if (@(Show-Settings) -contains 'quit') { break }
         Clear-Host
         continue
@@ -345,6 +408,7 @@ while ($true) {
             '2' { Invoke-Sync $true  $false }
             '3' { Invoke-Sync $false $true }
             '4' { Invoke-Sync $true  $true }
+            '5' { Invoke-Update }
         }
     } catch {
         Say "  FAILED: $($_.Exception.Message)" 'Red'
