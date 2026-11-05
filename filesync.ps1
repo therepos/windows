@@ -3,19 +3,19 @@
 # =============================================================================
 #  File Sync:
 #   1 = Compare   count the files in A and B and list what is missing from each
-#   2 = A -> B    copy the files missing from B
-#   3 = B -> A    copy the files missing from A
-#   4 = Both      copy both ways so A and B end up with the same files
-#   5 = Update A -> B   files that differ and are newer in A: replace B's copy
-#   6 = Update B -> A   files that differ and are newer in B: replace A's copy
-#   7 = Sync      copy missing files both ways, then replace every older copy
-#                 with the newer one, so A and B end up the same
+#   2 = Add missing A -> B      copy the files missing from B
+#   3 = Add missing B -> A      copy the files missing from A
+#   4 = Add missing both ways   2 and 3 together; never replaces a file
+#   5 = Replace older A -> B    files that differ and are newer in A: replace B's copy
+#   6 = Replace older B -> A    files that differ and are newer in B: replace A's copy
+#   7 = Full sync   add missing files both ways, then replace every older copy
+#                   with the newer one, so A and B end up the same
 #                 (same date but different size: always left alone)
 #   8 = Settings  change Folder A or Folder B, and the 'filesync' shortcut,
 #                 which runs a local copy in %LOCALAPPDATA%\filesync
 #   0 = Quit      closes this window
 #  Files match by relative path and name. Nothing is ever deleted. Options 2-4
-#  never replace a file; only Update (5-6) and Sync (7) do, and only an older copy with a newer
+#  never replace a file; only Replace older (5-6) and Full sync (7) do, and only an older copy with a newer
 #  one, after showing the list and asking.
 #  OneDrive / SharePoint folders work too; online-only files are downloaded
 #  when copied. Local, network and mapped drives are fine.
@@ -406,12 +406,12 @@ while ($true) {
     Say "    B  $b" 'DarkGray'
     Say ""
     Say "    1  -  Compare" 'White'
-    Say "    2  -  Copy A -> B" 'White'
-    Say "    3  -  Copy B -> A" 'White'
-    Say "    4  -  Copy both ways" 'White'
-    Say "    5  -  Update A -> B" 'White'
-    Say "    6  -  Update B -> A" 'White'
-    Say "    7  -  Sync" 'White'
+    Say "    2  -  Add missing A -> B" 'White'
+    Say "    3  -  Add missing B -> A" 'White'
+    Say "    4  -  Add missing both ways" 'White'
+    Say "    5  -  Replace older A -> B" 'White'
+    Say "    6  -  Replace older B -> A" 'White'
+    Say "    7  -  Full sync" 'White'
     Say "    8  -  Settings" 'White'
     Say "    0  -  Quit" 'White'
     Say ""
