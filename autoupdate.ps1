@@ -42,13 +42,29 @@ $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
            ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $IsAdmin -and -not $RunMode) {
     Write-Host "  Requesting administrator rights..." -ForegroundColor Yellow
-    if ($PSCommandPath) {
-        $elevArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
-    } else {
-        $cmd = "[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; try { irm '${ScriptUrl}?$(Get-Random)' | iex } catch { Write-Host `$_ -ForegroundColor Red; Read-Host 'Press Enter to exit' }"
-        $elevArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $cmd)
+    $run = if ($PSCommandPath) { "& '$($PSCommandPath -replace "'", "''")'" } else { "irm '${ScriptUrl}?$(Get-Random)' | iex" }
+    $cmd = "[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; try { $run } catch { Write-Host `$_ -ForegroundColor Red; Read-Host 'Press Enter to exit' }"
+    # Encoded, so Windows Terminal does not split the command at ';' or mangle quotes
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+    $psArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $enc)
+    # Open in Windows Terminal when installed (Windows ignores the default-terminal setting
+    # for admin windows), else in the classic console window
+    $opened = $false
+    if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
+        try {
+            Start-Process -FilePath 'wt.exe' -Verb RunAs -ArgumentList (@('powershell.exe') + $psArgs) -ErrorAction Stop
+            $opened = $true
+        } catch {
+            # 'No' on the admin prompt: do not ask a second time for the classic window
+            $e = $_.Exception
+            while ($e.InnerException) { $e = $e.InnerException }
+            if ($e -is [ComponentModel.Win32Exception] -and $e.NativeErrorCode -eq 1223) {
+                Write-Host "  Cancelled." -ForegroundColor Yellow
+                return
+            }
+        }
     }
-    Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $elevArgs
+    if (-not $opened) { Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $psArgs }
     Write-Host "  Continue in the new (elevated) window. You can close this one." -ForegroundColor Gray
     return
 }
