@@ -223,6 +223,7 @@ function Close-AppProcesses($procs) {
         Log "  Closing $($p.ProcessName) (PID $($p.Id))" 'DarkGray'
         & taskkill.exe /PID $p.Id *> $null
     }
+    Show-Bar
     $deadline = (Get-Date).AddSeconds(20)
     while ((Get-Date) -lt $deadline -and @($procs | Where-Object { Test-Running $_ }).Count) { Start-Sleep -Milliseconds 500 }
     foreach ($p in $procs) {
@@ -358,6 +359,7 @@ function Update-OnePackage($pkg, $protect) {
                 & winget.exe upgrade --id $pkg.Id --exact --source $pkg.Source --silent --force `
                     --accept-package-agreements --accept-source-agreements --disable-interactivity *> $null
                 $code = $LASTEXITCODE
+                Show-Bar
                 $status = if ($code -eq 0) { 'Ok' } else { 'Error' }
                 $detail = 'winget exit code 0x{0:X8}' -f $code
             }
@@ -386,6 +388,11 @@ function Update-OnePackage($pkg, $protect) {
         if ($reopen.Count) { Open-Apps $reopen }
     }
 }
+
+# The console hides the progress bar while a program like taskkill.exe or winget.exe runs,
+# and only shows it again on the next Write-Progress: call this after running one
+$script:Bar = $null
+function Show-Bar { if ($script:Bar) { Write-Progress @script:Bar } }
 
 function Save-Last([string]$text) {
     try { Set-Content -LiteralPath $LastFile -Value ("{0}, {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $text) } catch {}
@@ -433,12 +440,14 @@ function Invoke-Update {
         $i = 0
         foreach ($p in $pkgs) {
             $i++
-            Write-Progress -Id 1 -Activity "Updating apps ($i of $($pkgs.Count))" -Status "$($p.Name)" `
-                -PercentComplete ([int](($i - 1) * 100 / $pkgs.Count))
+            $script:Bar = @{ Id = 1; Activity = "Updating apps ($i of $($pkgs.Count))"; Status = "$($p.Name)"
+                             PercentComplete = [int](($i - 1) * 100 / $pkgs.Count) }
+            Show-Bar
             if (Test-Pinned $p.Id $pins) { Log "$($p.Name): pinned, skipped" 'DarkGray'; $n.skipped++; continue }
             $n[(Update-OnePackage $p $protect)]++
         }
         Write-Progress -Id 1 -Activity 'Updating apps' -Completed
+        $script:Bar = $null
         $summary = if ($pkgs.Count) { "$($n.ok) updated, $($n.failed) failed, $($n.skipped) skipped" } else { 'all up to date' }
         if ($script:RebootNeeded) { $summary += ', restart needed' }
         Log "==== Done: $summary ====" $(if ($n.failed) { 'Red' } else { 'Green' })
