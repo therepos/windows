@@ -19,14 +19,16 @@ One-click Windows scripts for a non-technical user. Scripts are run straight fro
   copy of the same script.
 - Header (see Documentation): line 1 the bootstrap, line 2 `# Purpose:`, then a fence.
 - Shared blocks: regions between `# >>> <name>` and `# <<< <name>` are copies of the blocks in
-  `scripts/sync-blocks.sh` (`say`, `menukey`, `downloads`). Never edit inside the markers; edit the block
+  `scripts/sync-blocks.sh` (`say`, `menukey`, `downloads`, `elevate`). Never edit inside the markers; edit the block
   there, then run it or `scripts/lint.sh --fix`. Per-script code goes outside. Shared look and behaviour
   belongs in a block, so changing it never touches a script's features.
 - `.ps1` files are ASCII only: Windows PowerShell 5.1 misreads other characters in files without a BOM.
 - Must run in Windows PowerShell 5.1 (no PowerShell 7-only syntax).
-- Ask for admin only when the script needs it. Self-elevate by re-running the one-liner
-  in an elevated window (`"${ScriptUrl}?$(Get-Random)"`, note the braces); otherwise run
-  in the user's own window.
+- Ask for admin only when the script needs it; otherwise run in the user's own window. Self-elevate
+  with the `elevate` shared block: `if (-not (Test-Admin)) { Start-Elevated $ScriptUrl; return }`
+  (`-NoExit` for one-shot scripts whose output must stay on screen). It re-runs the bootstrap (or the
+  local copy, when started from a shortcut) in an admin Windows Terminal window, because Windows ignores
+  the default-terminal setting for admin windows; without Terminal it uses the classic console.
 - Missing tools are fetched without admin into `%LOCALAPPDATA%\<app>` (e.g. 7za.exe).
 - Never hard-code passwords or tokens. Ask once on first use and save them
   DPAPI-encrypted (`ConvertFrom-SecureString`) in `%LOCALAPPDATA%\<app>\settings.json`.
@@ -46,9 +48,10 @@ One-click Windows scripts for a non-technical user. Scripts are run straight fro
 - Settings, when there are any, is its own submenu: `Set <thing>   [current value]`,
   `N  -  Back`, `0  -  Quit`, saved between runs. Blank keeps the current value or
   restores the default.
-- Settings may offer `Shortcut '<name>'  [on/off]`, which adds or removes
-  `function <name> { irm ... | iex }` in `$PROFILE` (setting CurrentUser execution
-  policy to RemoteSigned if needed).
+- Settings may offer `Shortcut '<name>'  [on/off]`: saves a local copy in `%LOCALAPPDATA%\<name>` and adds
+  or removes `function <name> { & "$env:LOCALAPPDATA\<name>\<name>.ps1" }` in `$PROFILE` (setting CurrentUser
+  execution policy to RemoteSigned if needed). Nothing is fetched when the shortcut runs; turning it off
+  and on again refreshes the copy (see zipper.ps1).
 - Output via `Say <text> <colour>`: Cyan headings, White options, Green done, Yellow
   notes, Red errors, DarkGray progress.
 - Default output folder is the user's real Downloads folder (registry Shell Folders).
@@ -60,8 +63,8 @@ One-click Windows scripts for a non-technical user. Scripts are run straight fro
 - Header by type, each followed by a fence and optional sections (`# Usage:`, `# Output:`, `# Note:`)
   closed by a fence:
   - `.ps1`: line 1 the bootstrap `# irm "https://github.com/therepos/windows/raw/main/apps/<name>.ps1?$(Get-Random)" | iex`
-    (`?$(Get-Random)` so a copy-pasted bootstrap gets the latest version right after a merge, past GitHub's cache)
-    (or `# pwsh -File .\<name>.ps1` for scripts run locally), line 2 `# Purpose:`
+    (or `# pwsh -File .\<name>.ps1` for scripts run locally), line 2 `# Purpose:`.
+    `?$(Get-Random)` makes a copied bootstrap fetch the latest version right after a merge, past GitHub's cache.
   - `.bat` / `.cmd`: line 1 `@echo off`, line 2 `:: Purpose:`, `::` fences; CRLF line endings
   - `.py`: line 1 `#!/usr/bin/env python3`, line 2 `# Purpose:`
 - `# Usage:` lists commands or menu options only: one per line, descriptions aligned in one column, never wrapped.

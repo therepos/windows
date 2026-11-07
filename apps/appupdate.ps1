@@ -30,18 +30,20 @@ $RunMode   = ($args -contains '-Run')      # set by the scheduled task
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-# --- Self-elevate: re-run the same one-liner (or the local copy, when started from the
-#     'appupdate' shortcut) in an elevated window ----------------------------------
-$IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-           ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $IsAdmin -and -not $RunMode) {
+# >>> elevate
+function Test-Admin {
+    ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+    ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+function Start-Elevated([string]$ScriptUrl, [switch]$NoExit) {
     Write-Host "  Requesting administrator rights..." -ForegroundColor Yellow
     $run = if ($PSCommandPath) { "& '$($PSCommandPath -replace "'", "''")'" } else { "irm '${ScriptUrl}?$(Get-Random)' | iex" }
     $cmd = "[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; try { $run } catch { Write-Host `$_ -ForegroundColor Red; Read-Host 'Press Enter to exit' }"
     # Encoded, so Windows Terminal does not split the command at ';' or mangle quotes
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
-    $psArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $enc)
-    # Windows Terminal when installed (Windows ignores the default-terminal setting for admin windows)
+    $psArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass')
+    if ($NoExit) { $psArgs += '-NoExit' }
+    $psArgs += @('-EncodedCommand', $enc)
     $opened = $false
     if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
         try {
@@ -59,8 +61,10 @@ if (-not $IsAdmin -and -not $RunMode) {
     }
     if (-not $opened) { Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $psArgs }
     Write-Host "  Continue in the new (elevated) window. You can close this one." -ForegroundColor Gray
-    return
 }
+# <<< elevate
+$IsAdmin = Test-Admin
+if (-not $IsAdmin -and -not $RunMode) { Start-Elevated $ScriptUrl; return }
 
 function Say($msg, $color = 'Gray') { if (-not $RunMode) { Write-Host $msg -ForegroundColor $color } }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Purpose: Copy the shared blocks (say, menukey, downloads) into every PowerShell script
+# Purpose: Copy the shared blocks (say, menukey, downloads, elevate) into every PowerShell script
 # =============================================================================
 # Usage:
 #   scripts/sync-blocks.sh           copy each block into every script that has its markers
@@ -13,7 +13,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # --- Blocks ------------------------------------------------------------------
-BLOCK_NAMES=(say menukey downloads)
+BLOCK_NAMES=(say menukey downloads elevate)
 
 # say: coloured console output
 # shellcheck disable=SC2034  # read via ${!var} below
@@ -60,6 +60,45 @@ function Get-DownloadsFolder {
         if (Test-Path -LiteralPath $path) { return $path }
     }
     return (Join-Path $env:USERPROFILE 'Downloads')
+}
+BLOCK
+)
+
+# elevate: re-run this script as admin, in Windows Terminal when installed (Windows ignores
+# the default-terminal setting for admin windows). From GitHub it re-runs the bootstrap, from a
+# file (shortcut) that file. -NoExit keeps the admin window open after a one-shot script.
+# shellcheck disable=SC2034  # read via ${!var} below
+BLOCK_elevate=$(cat <<'BLOCK'
+function Test-Admin {
+    ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+    ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+function Start-Elevated([string]$ScriptUrl, [switch]$NoExit) {
+    Write-Host "  Requesting administrator rights..." -ForegroundColor Yellow
+    $run = if ($PSCommandPath) { "& '$($PSCommandPath -replace "'", "''")'" } else { "irm '${ScriptUrl}?$(Get-Random)' | iex" }
+    $cmd = "[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; try { $run } catch { Write-Host `$_ -ForegroundColor Red; Read-Host 'Press Enter to exit' }"
+    # Encoded, so Windows Terminal does not split the command at ';' or mangle quotes
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+    $psArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass')
+    if ($NoExit) { $psArgs += '-NoExit' }
+    $psArgs += @('-EncodedCommand', $enc)
+    $opened = $false
+    if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
+        try {
+            Start-Process -FilePath 'wt.exe' -Verb RunAs -ArgumentList (@('powershell.exe') + $psArgs) -ErrorAction Stop
+            $opened = $true
+        } catch {
+            # 'No' on the admin prompt: do not ask again for the classic window
+            $e = $_.Exception
+            while ($e.InnerException) { $e = $e.InnerException }
+            if ($e -is [ComponentModel.Win32Exception] -and $e.NativeErrorCode -eq 1223) {
+                Write-Host "  Cancelled." -ForegroundColor Yellow
+                return
+            }
+        }
+    }
+    if (-not $opened) { Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $psArgs }
+    Write-Host "  Continue in the new (elevated) window. You can close this one." -ForegroundColor Gray
 }
 BLOCK
 )
