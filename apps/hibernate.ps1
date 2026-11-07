@@ -1,8 +1,8 @@
-# irm https://github.com/therepos/windows/raw/main/hibernate.ps1 | iex
+# irm https://github.com/therepos/windows/raw/main/apps/hibernate.ps1 | iex
 # Purpose: Enable hibernation on Windows (powercfg /hibernate on)
 # =============================================================================
 
-$ScriptUrl = 'https://github.com/therepos/windows/raw/main/hibernate.ps1'
+$ScriptUrl = 'https://github.com/therepos/windows/raw/main/apps/hibernate.ps1'
 
 # --- Self-elevate: re-run the same one-liner in an elevated window -----------
 $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()

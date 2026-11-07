@@ -73,7 +73,7 @@ trap 'rm -f "$TMP_BLOCK"' EXIT
 
 drift=0
 changed=0
-for f in "$ROOT"/*.ps1; do
+for f in "$ROOT"/apps/*.ps1; do
     [[ -f "$f" ]] || continue
     cp "$f" "$f.new"
     for b in "${BLOCK_NAMES[@]}"; do

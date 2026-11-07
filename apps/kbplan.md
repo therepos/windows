@@ -50,13 +50,13 @@ parts_fts(title, content)                           FTS5 over parts, porter toke
 File name regexes per document type, priority order: RCM, audit programme, engagement letter, proposal, fee, final
 report, AC paper, planning memo, walkthrough, issues, closing. Confidence 3 = name says final/signed/issued,
 2 = clear keyword, 1 = draft/version marker or weak keyword type. Same name+size elsewhere collapsed into one row.
-Known gap: RCMs with generic names (D100.xls) are missed; content search in kb.db finds them (see `kb_profile.py`).
+Known gap: RCMs with generic names (D100.xls) are missed; content search in kb.db finds them (see `kbprofile.py`).
 
 ## Decisions taken
 
 - Files may leave the network; the share is legacy. kb.db and the CSVs are the working copies.
 - Old .doc files converted by LibreOffice (bulk), Word as fallback, raw text as last resort. 7 files are raw text.
-- Scanned PDFs: no OCR yet. Decide after `kb_profile.py` shows how many have no text twin in the same folder.
+- Scanned PDFs: no OCR yet. Decide after `kbprofile.py` shows how many have no text twin in the same folder.
   Rule agreed: none for scans with a text twin; Tesseract for the rest so they are searchable; model reading of page
   images only for key documents with no twin.
 - AI reading happens where the database is: locally in Claude Code / Cowork with the folder open, or batch via
@@ -65,20 +65,20 @@ Known gap: RCMs with generic names (D100.xls) are missed; content search in kb.d
 
 ## Build stages
 
-### Stage 1: profile (script, no AI)   `python kb_profile.py`
+### Stage 1: profile (script, no AI)   `python kbprofile.py`
 Sanity checks and the numbers needed for decisions: coverage per client-year, scanned PDFs without a text twin,
 RCMs found by content that the shortlist missed, top processes. Writes `kb_profile.xlsx`.
 
-### Stage 2: RCM rows (script, no AI)   `python kb_rcm.py`
+### Stage 2: RCM rows (script, no AI)   `python kbrcm.py`
 Parses every RCM / audit programme table into rows: engagement, process, risk, control, test procedure, plus the
 source doc and table. Header detection is heuristic; rows it cannot map are kept with raw cells. Writes table
 `rcm_rows` into kb.db and `rcm_rows.xlsx` for review. This is the raw material of the methodology library.
 
-### Stage 3: registry bundles (script + AI)   `python kb_bundle.py`
+### Stage 3: registry bundles (script + AI)   `python kbbundle.py`
 For each engagement builds one compact markdown bundle (engagement letter first pages, report cover and scope, fee
 sheet, proposal summary) under `bundles/<client>__<engagement>.md`, capped at ~6,000 words, plus a regex first pass
 of dates and fees into `registry_draft.csv`. The AI then reads bundles and fills `registry.jsonl`, one JSON object per
-engagement with the fields in `kb_bundle.py --schema`. `python kb_bundle.py --ingest` loads the JSONL into table
+engagement with the fields in `kbbundle.py --schema`. `python kbbundle.py --ingest` loads the JSONL into table
 `registry`. Work newest years first; older engagements matter less for tenders.
 
 ### Stage 4: methodology normalisation (AI)
@@ -93,9 +93,9 @@ sources)`. Senior review before use. Script to be written after Stage 2 shows th
 ## Next steps, in order
 
 1. Put kb.db, extract.log and extraction_shortlist.xlsx in this folder (or pass `--db`).
-2. `python kb_profile.py` and read `kb_profile.xlsx`. Decide OCR scope from the "scanned no twin" sheet.
-3. `python kb_rcm.py`, open `rcm_rows.xlsx`, check a dozen rows against the source documents, tune header patterns.
-4. `python kb_bundle.py`, then start reading bundles for the newest engagements and writing `registry.jsonl`.
+2. `python kbprofile.py` and read `kb_profile.xlsx`. Decide OCR scope from the "scanned no twin" sheet.
+3. `python kbrcm.py`, open `rcm_rows.xlsx`, check a dozen rows against the source documents, tune header patterns.
+4. `python kbbundle.py`, then start reading bundles for the newest engagements and writing `registry.jsonl`.
 5. Report numbers back: engagements found, rows parsed, coverage. Then design Stage 4 on real data.
 
 ## Running scripts here

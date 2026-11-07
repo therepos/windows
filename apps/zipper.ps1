@@ -1,4 +1,4 @@
-# irm https://github.com/therepos/windows/raw/main/zipper.ps1 | iex
+# irm https://github.com/therepos/windows/raw/main/apps/zipper.ps1 | iex
 # Purpose: Zip files into a password-protected 7z (auto-split over 500 MB) or unzip one, split sets included
 # =============================================================================
 # Usage:
@@ -273,7 +273,7 @@ function Switch-Shortcut {
             if ($ScriptFile -ne $LocalScript) { Copy-Item -LiteralPath $ScriptFile -Destination $LocalScript -Force }
         } else {
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-            Invoke-WebRequest -Uri 'https://github.com/therepos/windows/raw/main/zipper.ps1' -OutFile $LocalScript -UseBasicParsing
+            Invoke-WebRequest -Uri 'https://github.com/therepos/windows/raw/main/apps/zipper.ps1' -OutFile $LocalScript -UseBasicParsing
         }
         Unblock-File -LiteralPath $LocalScript -ErrorAction SilentlyContinue
         if ((Get-ExecutionPolicy -Scope CurrentUser) -in 'Undefined', 'Restricted', 'AllSigned') {

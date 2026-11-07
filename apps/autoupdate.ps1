@@ -1,4 +1,4 @@
-# irm https://github.com/therepos/windows/raw/main/autoupdate.ps1 | iex
+# irm https://github.com/therepos/windows/raw/main/apps/autoupdate.ps1 | iex
 # Purpose: Update all apps with winget every Sunday 23:45, closing open apps first and reopening them after
 # =============================================================================
 # Usage:
@@ -17,7 +17,7 @@
 #   The task runs a local copy; turning the weekly update on again refreshes it
 # =============================================================================
 
-$ScriptUrl = 'https://github.com/therepos/windows/raw/main/autoupdate.ps1'
+$ScriptUrl = 'https://github.com/therepos/windows/raw/main/apps/autoupdate.ps1'
 $ToolDir   = Join-Path $env:LOCALAPPDATA 'autoupdate'
 $LocalCopy = Join-Path $ToolDir 'autoupdate.ps1'
 $LogFile   = Join-Path $ToolDir 'update.log'

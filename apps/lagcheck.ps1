@@ -1,4 +1,4 @@
-# irm https://github.com/therepos/windows/raw/main/lagcheck.ps1 | iex
+# irm https://github.com/therepos/windows/raw/main/apps/lagcheck.ps1 | iex
 # Purpose: Find what makes a Windows PC laggy (slow windows, Explorer, Start search) and save one report
 # =============================================================================
 # Usage:
@@ -11,7 +11,7 @@
 #   Output: Diag Lag <model> yyyyMMdd-HHmm.txt (folder asked, default Downloads); FLAGS at the top are the detected problems
 # =============================================================================
 
-$ScriptUrl = 'https://github.com/therepos/windows/raw/main/lagcheck.ps1'
+$ScriptUrl = 'https://github.com/therepos/windows/raw/main/apps/lagcheck.ps1'
 
 # --- Self-elevate: re-run the same one-liner in an elevated window ------------
 $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()

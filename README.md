@@ -3,7 +3,7 @@
 One-click Windows scripts.
 
 - `.bat` / `.cmd`: download and double-click.
-- `.ps1`: run the bootstrap on line 1 of the file (`irm https://github.com/therepos/windows/raw/main/<name>.ps1 | iex`) in PowerShell.
+- `.ps1`: run the bootstrap on line 1 of the file (`irm https://github.com/therepos/windows/raw/main/apps/<name>.ps1 | iex`) in PowerShell.
 - `.py`: run with Python 3.
 
 ## One-word shortcuts (optional)
@@ -14,7 +14,7 @@ One-click Windows scripts.
 `sysinfo`: paste once in PowerShell, then open a new window and type `sysinfo`:
 
 ```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force; if (!(Test-Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }; Add-Content $PROFILE "`nfunction sysinfo { irm https://github.com/therepos/windows/raw/main/systeminfo.ps1 | iex }"
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force; if (!(Test-Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }; Add-Content $PROFILE "`nfunction sysinfo { irm https://github.com/therepos/windows/raw/main/apps/systeminfo.ps1 | iex }"
 ```
 
 Remove them:
@@ -33,8 +33,7 @@ windows
 ├── CLAUDE.md               # @AGENTS.md
 ├── .github
 │   └── workflows           # lint on every PR and push
-├── *.ps1 *.bat *.cmd *.py  # one script per tool
-├── kb                      # knowledge-base stages (Python)
+├── apps                    # one script per tool (ps1, bat, cmd, py), one-word names
 └── scripts
     ├── sync-blocks.sh      # shared blocks (say, menukey, downloads), synced into every script
     └── lint.sh             # checks scripts against AGENTS.md (--fix repairs what it can)
