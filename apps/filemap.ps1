@@ -1,4 +1,4 @@
-# irm https://github.com/therepos/windows/raw/main/filemap.ps1 | iex
+# irm https://github.com/therepos/windows/raw/main/apps/filemap.ps1 | iex
 # Purpose: List every file in a folder and its subfolders, as a text list or a clickable Excel index
 # =============================================================================
 # Usage:

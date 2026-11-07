@@ -1,4 +1,4 @@
-# irm https://github.com/therepos/windows/raw/main/agentprofiler.ps1 | iex
+# irm https://github.com/therepos/windows/raw/main/apps/agentprofiler.ps1 | iex
 # Purpose: Test what corporate monitoring agents can see during local vs internet file transfers
 # =============================================================================
 # Note:
@@ -6,7 +6,7 @@
 #   Output: monitoring_test_log_<timestamp>.txt on the Desktop
 # =============================================================================
 
-$ScriptUrl = 'https://github.com/therepos/windows/raw/main/agentprofiler.ps1'
+$ScriptUrl = 'https://github.com/therepos/windows/raw/main/apps/agentprofiler.ps1'
 
 # --- Self-elevate: re-run the same one-liner in an elevated window -----------
 #  Admin is needed to read IO counters and owning PIDs of security agents.

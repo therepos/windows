@@ -1,4 +1,4 @@
-# irm https://github.com/therepos/windows/raw/main/filesync.ps1 | iex
+# irm https://github.com/therepos/windows/raw/main/apps/filesync.ps1 | iex
 # Purpose: Compare two folders by file content, copy what is missing, replace older versions, remove duplicates
 # =============================================================================
 # Usage:
@@ -23,7 +23,7 @@
 # =============================================================================
 
 $ToolDir      = Join-Path $env:LOCALAPPDATA 'filesync'
-$ScriptUrl    = 'https://github.com/therepos/windows/raw/main/filesync.ps1'
+$ScriptUrl    = 'https://github.com/therepos/windows/raw/main/apps/filesync.ps1'
 $Preview      = 10                      # lines shown before "... and N more"
 $PageSize     = 40                      # lines per page when viewing a full list
 

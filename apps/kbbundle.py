@@ -2,9 +2,9 @@
 # Purpose: Stage 3: one markdown bundle per engagement for the AI, a regex draft of the registry, and ingest of the AI's answers
 # =============================================================================
 # Usage:
-#   python kb_bundle.py [--db kb.db] [--years 2015-2026]   write bundles/<client>__<engagement>.md and registry_draft.csv
-#   python kb_bundle.py --schema                            the JSON record the AI writes per engagement into registry.jsonl
-#   python kb_bundle.py --ingest registry.jsonl             load the JSONL into table registry
+#   python kbbundle.py [--db kb.db] [--years 2015-2026]   write bundles/<client>__<engagement>.md and registry_draft.csv
+#   python kbbundle.py --schema                            the JSON record the AI writes per engagement into registry.jsonl
+#   python kbbundle.py --ingest registry.jsonl             load the JSONL into table registry
 # =============================================================================
 
 import sqlite3, argparse, re, os, json, csv
@@ -76,4 +76,4 @@ for (client, engagement, yr), ds in sorted(eng.items(), key=lambda x: (-x[0][2],
 with open('registry_draft.csv', 'w', newline='', encoding='utf-8-sig') as fh:
     w = csv.writer(fh); w.writerow(['Client', 'Engagement', 'Year', 'Processes', 'Docs', 'BundleDocIds', 'DatesFound', 'AmountsFound', 'BundleChars', 'Note']); w.writerows(draft)
 print(f'{len(eng):,} engagements in {y0}-{y1}; bundles written to .\\bundles, draft to registry_draft.csv')
-print('next: read bundles newest first, write one JSON line per engagement to registry.jsonl (python kb_bundle.py --schema), then --ingest registry.jsonl')
+print('next: read bundles newest first, write one JSON line per engagement to registry.jsonl (python kbbundle.py --schema), then --ingest registry.jsonl')

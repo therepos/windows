@@ -6,12 +6,14 @@ One-click Windows scripts for a non-technical user. Scripts are run straight fro
 
 ## Layout
 
-- `<name>.ps1`, `.bat`, `.cmd`, `.py` at the root, one script per tool; `kb/` holds the knowledge-base Python stages
-- `scripts/`  repo helpers: `sync-blocks.sh` (shared blocks), `lint.sh` (checks and safe fixes)
+- Root: docs only (`AGENTS.md`, `CLAUDE.md`, `README.md`), plus `apps/`, `scripts/`, `.github/`.
+- `apps/<name>.ps1|.bat|.cmd|.py`, flat, one script per tool; `<name>` is one lowercase word
+  (the knowledge-base stages are `kbprofile`, `kbrcm`, `kbbundle`; their plan is `apps/kbplan.md`)
+- `scripts/`  repo helpers, never run by users: `sync-blocks.sh` (shared blocks), `lint.sh` (checks and safe fixes)
 
 ## Script format
 
-- Prefer `.ps1` run as `irm https://github.com/therepos/windows/raw/main/<name>.ps1 | iex`:
+- Prefer `.ps1` run as `irm https://github.com/therepos/windows/raw/main/apps/<name>.ps1 | iex`:
   nothing to download, no SmartScreen warning, no Python needed. Do not keep a `.bat`
   copy of the same script.
 - Header (see Documentation): line 1 the bootstrap, line 2 `# Purpose:`, then a fence.
@@ -56,7 +58,7 @@ One-click Windows scripts for a non-technical user. Scripts are run straight fro
 
 - Header by type, each followed by a fence and optional sections (`# Usage:`, `# Output:`, `# Note:`)
   closed by a fence:
-  - `.ps1`: line 1 the bootstrap `# irm https://github.com/therepos/windows/raw/main/<name>.ps1 | iex`
+  - `.ps1`: line 1 the bootstrap `# irm https://github.com/therepos/windows/raw/main/apps/<name>.ps1 | iex`
     (or `# pwsh -File .\<name>.ps1` for scripts run locally), line 2 `# Purpose:`
   - `.bat` / `.cmd`: line 1 `@echo off`, line 2 `:: Purpose:`, `::` fences; CRLF line endings
   - `.py`: line 1 `#!/usr/bin/env python3`, line 2 `# Purpose:`

@@ -2,7 +2,7 @@
 # Purpose: Extract embedded files and attachments from .xlsx .docx .pptx .msg .eml
 # =============================================================================
 # Usage:
-#   python ole-extract.py [file]   or drag a file onto it; with no file it asks for one per line
+#   python oleextract.py [file]   or drag a file onto it; with no file it asks for one per line
 # =============================================================================
 
 import importlib, subprocess, sys, os

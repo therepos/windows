@@ -26,7 +26,7 @@ done
 FULL_CHECK_TRIGGERS=(scripts/sync-blocks.sh scripts/lint.sh .github/workflows/ci-lint.yml)
 
 shopt -s nullglob
-ALL=(*.ps1 *.bat *.cmd *.py kb/*.py scripts/*.sh scripts/*.py)
+ALL=(apps/*.ps1 apps/*.bat apps/*.cmd apps/*.py scripts/*.sh scripts/*.py)
 
 if [[ -n "$BASE" ]]; then
     mapfile -t CHANGED < <({ git diff --name-only --diff-filter=ACMR "$BASE"...HEAD
@@ -88,6 +88,13 @@ header_ok() {
     last="$(tr -d '\r' < "$f" | awk -v s=$((n + 1)) -v p="$prefix" 'NR>=s { if (index($0, p) == 1) l=$0; else exit } END { print l }')"
     [[ -z "$last" || "$last" == "$fence" ]] || bad "$f" "header comment block must end with a fence"
 }
+
+# --- Layout: scripts live in apps/ with one-word names --------------------------
+for f in *.ps1 *.bat *.cmd *.py *.sh; do bad "$f" "scripts belong in apps/ (or scripts/ for repo helpers), not the root"; done
+for f in "${FILES[@]}"; do
+    [[ "$f" == apps/* ]] || continue
+    [[ "$f" =~ ^apps/[a-z0-9]+\.(ps1|bat|cmd|py)$ ]] || bad "$f" "name must be one lowercase word"
+done
 
 # --- PowerShell --------------------------------------------------------------
 PS=()

@@ -1,4 +1,4 @@
-# irm https://github.com/therepos/windows/raw/main/systeminfo.ps1 | iex
+# irm https://github.com/therepos/windows/raw/main/apps/systeminfo.ps1 | iex
 # Purpose: Collect raw hardware/software info from a Windows laptop and/or Android phone
 # =============================================================================
 # Usage:
@@ -11,7 +11,7 @@
 #   Output: folder asked, default Downloads
 # =============================================================================
 
-$ScriptUrl = 'https://github.com/therepos/windows/raw/main/systeminfo.ps1'
+$ScriptUrl = 'https://github.com/therepos/windows/raw/main/apps/systeminfo.ps1'
 
 # --- Self-elevate: re-run the same one-liner in an elevated window ------------
 $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()

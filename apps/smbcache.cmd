@@ -7,8 +7,8 @@
 :: ============================================================================
 
 net session >nul 2>&1 || (
-    copy /y "%~f0" "%TEMP%\smb-cache-toggle.cmd" >nul
-    powershell -NoProfile -Command "Start-Process -FilePath '%TEMP%\smb-cache-toggle.cmd' -Verb RunAs"
+    copy /y "%~f0" "%TEMP%\smbcache.cmd" >nul
+    powershell -NoProfile -Command "Start-Process -FilePath '%TEMP%\smbcache.cmd' -Verb RunAs"
     exit /b
 )
 
