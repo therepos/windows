@@ -11,7 +11,8 @@
 #  reopened minimized if it was minimized or in the tray. A failed update is retried twice (second retry with winget.exe --force);
 #  retries also close other apps that have its files open (e.g. a browser using the OBS
 #  virtual camera) and reopen them after.
-#  'Update now' shows a progress bar (apps done of total, spinner and time for the current app); the weekly task runs hidden and shows a Windows
+#  'Update now' shows a progress bar (apps done of total, plus a spinner and the time
+#  taken for the current app). The weekly task runs hidden and shows a Windows
 #  notification with the result when it is done.
 #  Skipped: apps pinned with 'winget pin add <id>', Microsoft Store apps (the Store
 #  updates those itself).
