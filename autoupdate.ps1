@@ -8,7 +8,7 @@
 #   3 = Open log       %LOCALAPPDATA%\autoupdate\update.log
 #   0 = Quit           closes this window
 #  An app that is open is closed first (gracefully, forced after 20 s), updated, then
-#  reopened. A failed update is retried twice (second retry with winget.exe --force);
+#  reopened minimized if it was minimized or in the tray. A failed update is retried twice (second retry with winget.exe --force);
 #  retries also close other apps that have its files open (e.g. a browser using the OBS
 #  virtual camera) and reopen them after.
 #  'Update now' shows a progress bar; the weekly task runs hidden and shows a Windows
@@ -207,15 +207,17 @@ function Test-Running($p) {
     try { return (-not $p.HasExited) } catch { return ($null -ne (Get-Process -Id $p.Id -ErrorAction SilentlyContinue)) }
 }
 
-# Closes the processes (like clicking X, then forced after 20 s). Returns the exe paths to
-# reopen afterwards: only each app's top process, not the helpers it started itself.
+# Closes the processes (like clicking X, then forced after 20 s). Returns what to reopen
+# afterwards (exe path and window state): only each app's top process, not its helpers.
 function Close-AppProcesses($procs) {
     $ids = @($procs | ForEach-Object { $_.Id })
     $reopen = @()
     foreach ($p in $procs) {
         $parent = (Get-CimInstance Win32_Process -Filter "ProcessId=$($p.Id)" -ErrorAction SilentlyContinue).ParentProcessId
         $path = $null; try { $path = $p.Path } catch {}
-        if ($path -and $ids -notcontains [int]$parent -and $reopen -notcontains $path) { $reopen += $path }
+        if ($path -and $ids -notcontains [int]$parent -and -not @($reopen | Where-Object { $_.Path -eq $path }).Count) {
+            $reopen += [pscustomobject]@{ Path = $path; State = (Get-WindowState $p) }
+        }
     }
     foreach ($p in $procs) {
         Log "  Closing $($p.ProcessName) (PID $($p.Id))" 'DarkGray'
@@ -278,13 +280,47 @@ function Close-FileUsers($pkg, $dirs, $protect) {
     Close-AppProcesses $procs
 }
 
-# explorer.exe starts the app as the normal user, not as admin like this script
-function Open-Apps($paths) {
-    foreach ($path in @($paths | Select-Object -Unique)) {
-        if ($path -and (Test-Path -LiteralPath $path)) {
-            Log "  Reopening $(Split-Path -Path $path -Leaf)" 'DarkGray'
-            Start-Process -FilePath (Join-Path $env:windir 'explorer.exe') -ArgumentList "`"$path`""
+# Window state before closing: 'normal', 'minimized', or 'hidden' (no visible window,
+# e.g. in the system tray)
+if (-not ('AutoUpdate.Win' -as [type])) {
+    Add-Type -Namespace AutoUpdate -Name Win -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
+[DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+'@
+}
+function Get-WindowState($p) {
+    $h = [IntPtr]::Zero
+    try { $p.Refresh(); $h = $p.MainWindowHandle } catch {}
+    if ($h -eq [IntPtr]::Zero) { return 'hidden' }
+    if ([AutoUpdate.Win]::IsIconic($h)) { return 'minimized' }
+    'normal'
+}
+
+# Waits up to 15 s for the reopened app's window, then minimizes it like clicking its
+# minimize button, so apps set to 'minimize to tray' go back to the tray
+function Restore-WindowState([string]$path) {
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Milliseconds 500
+        $w = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+            $pp = $null; try { $pp = $_.Path } catch {}
+            $pp -eq $path -and $_.MainWindowHandle -ne [IntPtr]::Zero } | Select-Object -First 1
+        if ($w) {
+            [void][AutoUpdate.Win]::PostMessage($w.MainWindowHandle, 0x0112, [IntPtr]0xF020, [IntPtr]::Zero)  # WM_SYSCOMMAND, SC_MINIMIZE
+            return
         }
+    }
+}
+
+# explorer.exe starts the app as the normal user, not as admin like this script
+function Open-Apps($items) {
+    $seen = @()
+    foreach ($it in @($items)) {
+        if (-not $it -or -not $it.Path -or $seen -contains $it.Path) { continue }
+        $seen += $it.Path
+        if (-not (Test-Path -LiteralPath $it.Path)) { continue }
+        Log "  Reopening $(Split-Path -Path $it.Path -Leaf)$(if ($it.State -ne 'normal') { " ($($it.State))" })" 'DarkGray'
+        Start-Process -FilePath (Join-Path $env:windir 'explorer.exe') -ArgumentList "`"$($it.Path)`""
+        if ($it.State -ne 'normal') { Restore-WindowState $it.Path }
     }
 }
 
