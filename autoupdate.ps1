@@ -13,8 +13,8 @@
 #  reopened minimized if it was minimized or in the tray. A failed update is retried twice (second retry with winget.exe --force);
 #  retries also close other apps that have its files open (e.g. a browser using the OBS
 #  virtual camera) and reopen them after.
-#  'Update now' shows a progress bar (apps done of total, plus a spinner and the time
-#  taken for the current app). The weekly task runs hidden and shows a Windows
+#  'Update now' shows a bar under the app being updated (apps done of total, plus a
+#  spinner and the time taken for that app). The weekly task runs hidden and shows a Windows
 #  notification with the result when it is done.
 #  Skipped: apps pinned with 'winget pin add <id>', Microsoft Store apps (the Store
 #  updates those itself).
@@ -238,7 +238,6 @@ function Close-AppProcesses($procs) {
         Log "  Closing $($p.ProcessName) (PID $($p.Id))" 'DarkGray'
         & taskkill.exe /PID $p.Id *> $null
     }
-    Show-Bar
     $deadline = (Get-Date).AddSeconds(20)
     while ((Get-Date) -lt $deadline -and @($procs | Where-Object { Test-Running $_ }).Count) { Start-Sleep -Milliseconds 500 }
     foreach ($p in $procs) {
@@ -343,21 +342,38 @@ function Open-Apps($items) {
 # =====================================================================
 #  UPDATE
 # =====================================================================
-# Waits until $IsDone returns true. In the window it shows a spinner and the time taken
-# on the progress bar, e.g. 'Downloading / installing  /  1:23'
-function Wait-WithSpinner([scriptblock]$IsDone) {
+# Live line under the app being updated, like winget's own bar (window only, not the task):
+#   [solid blocks for apps done][shaded for apps left]  11 of 18   /  1:23
+# The bar is apps done out of the total; spinner and time are for the current app.
+$script:Bar = $null      # @{ Index; Total } of the app being updated
+function Get-ConsoleWidth { try { [Math]::Max(40, [Console]::WindowWidth - 1) } catch { 79 } }
+function Write-LiveLine([int]$Frame, [TimeSpan]$Elapsed) {
+    $width  = 30
+    $done   = [int][Math]::Floor(($script:Bar.Index - 1) * $width / [Math]::Max(1, $script:Bar.Total))
     $frames = '|', '/', '-', '\'
+    $tail   = '  {0} of {1}   {2}  {3}:{4:00}' -f $script:Bar.Index, $script:Bar.Total, $frames[$Frame % 4],
+                [int][Math]::Floor($Elapsed.TotalMinutes), $Elapsed.Seconds
+    $pad    = [Math]::Max(0, (Get-ConsoleWidth) - 2 - $width - $tail.Length)
+    Write-Host "`r  " -NoNewline
+    Write-Host ([string][char]0x2588 * $done) -ForegroundColor Cyan -NoNewline
+    Write-Host ([string][char]0x2591 * ($width - $done)) -ForegroundColor DarkGray -NoNewline
+    Write-Host ($tail + (' ' * $pad)) -NoNewline
+}
+function Clear-LiveLine { Write-Host ("`r" + (' ' * (Get-ConsoleWidth)) + "`r") -NoNewline }
+
+# Waits until $IsDone returns true, showing the live line meanwhile
+function Wait-WithSpinner([scriptblock]$IsDone) {
+    $live = (-not $RunMode) -and $script:Bar
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $n = 0
-    while (-not (& $IsDone)) {
-        if (-not $RunMode -and $script:Bar) {
-            $b = $script:Bar.Clone()
-            $b.CurrentOperation = 'Downloading / installing  {0}  {1}:{2:00}' -f $frames[$n % 4],
-                [int][Math]::Floor($sw.Elapsed.TotalMinutes), $sw.Elapsed.Seconds
-            Write-Progress @b
+    try {
+        while (-not (& $IsDone)) {
+            if ($live) { Write-LiveLine $n $sw.Elapsed }
+            $n++
+            Start-Sleep -Milliseconds 250
         }
-        $n++
-        Start-Sleep -Milliseconds 250
+    } finally {
+        if ($live) { Clear-LiveLine }
     }
 }
 
@@ -396,7 +412,6 @@ function Invoke-WinGetUpdate($params) {
     } finally {
         # If stopped with Ctrl+C mid-install, let the installer finish instead of cutting it off
         if ($ps -and (-not $handle -or $handle.IsCompleted)) { $ps.Dispose() }
-        Show-Bar
     }
 }
 
@@ -479,11 +494,6 @@ function Update-OnePackage($pkg, $protect) {
     }
 }
 
-# The console hides the progress bar while a program like taskkill.exe or winget.exe runs,
-# and only shows it again on the next Write-Progress: call this after running one
-$script:Bar = $null
-function Show-Bar { if ($script:Bar) { Write-Progress @script:Bar } }
-
 function Save-Last([string]$text) {
     try { Set-Content -LiteralPath $LastFile -Value ("{0}, {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $text) } catch {}
     if ($RunMode) { Show-Toast 'Apps updated' $text }
@@ -525,18 +535,13 @@ function Invoke-Update {
         $pkgs = @(Get-WinGetPackage -ErrorAction Stop | Where-Object {
             $_.IsUpdateAvailable -and $_.Source -eq 'winget' -and $_.Id -ne 'Microsoft.AppInstaller' })
         $n = @{ ok = 0; failed = 0; skipped = 0 }
-        # Progress bar in the window ('Update now'): apps done out of the total
-        if (-not $RunMode) { $ProgressPreference = 'Continue' }
         $i = 0
         foreach ($p in $pkgs) {
             $i++
-            $script:Bar = @{ Id = 1; Activity = "Updating apps ($i of $($pkgs.Count))"; Status = "$($p.Name)"
-                             PercentComplete = [int](($i - 1) * 100 / $pkgs.Count) }
-            Show-Bar
+            $script:Bar = @{ Index = $i; Total = $pkgs.Count }
             if (Test-Pinned $p.Id $pins) { Log "$($p.Name): pinned, skipped" 'DarkGray'; $n.skipped++; continue }
             $n[(Update-OnePackage $p $protect)]++
         }
-        Write-Progress -Id 1 -Activity 'Updating apps' -Completed
         $script:Bar = $null
         $summary = if ($pkgs.Count) { "$($n.ok) updated, $($n.failed) failed, $($n.skipped) skipped" } else { 'all up to date' }
         if ($script:RebootNeeded) { $summary += ', restart needed' }
