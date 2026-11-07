@@ -6,6 +6,8 @@
 #                      PC is on again if it was off or asleep then)
 #   2 = Update now     same update, in this window
 #   3 = Open log       %LOCALAPPDATA%\autoupdate\update.log
+#   4 = Settings       the 'autoupdate' shortcut: type autoupdate in any new PowerShell
+#                      window to run the local copy in %LOCALAPPDATA%\autoupdate
 #   0 = Quit           closes this window
 #  An app that is open is closed first (gracefully, forced after 20 s), updated, then
 #  reopened minimized if it was minimized or in the tray. A failed update is retried twice (second retry with winget.exe --force);
@@ -34,14 +36,19 @@ $RunMode   = ($args -contains '-Run')      # set by the scheduled task
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-# --- Self-elevate: re-run the same one-liner in an elevated window ------------
+# --- Self-elevate: re-run the same one-liner (or the local copy, when started from the
+#     'autoupdate' shortcut) in an elevated window ----------------------------------
 $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
            ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $IsAdmin -and -not $RunMode) {
     Write-Host "  Requesting administrator rights..." -ForegroundColor Yellow
-    $cmd = "[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; try { irm '${ScriptUrl}?$(Get-Random)' | iex } catch { Write-Host `$_ -ForegroundColor Red; Read-Host 'Press Enter to exit' }"
-    Start-Process -FilePath 'powershell.exe' -Verb RunAs `
-        -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $cmd
+    if ($PSCommandPath) {
+        $elevArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
+    } else {
+        $cmd = "[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; try { irm '${ScriptUrl}?$(Get-Random)' | iex } catch { Write-Host `$_ -ForegroundColor Red; Read-Host 'Press Enter to exit' }"
+        $elevArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $cmd)
+    }
+    Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $elevArgs
     Write-Host "  Continue in the new (elevated) window. You can close this one." -ForegroundColor Gray
     return
 }
@@ -572,6 +579,66 @@ function Disable-WeeklyTask {
 }
 
 # =====================================================================
+#  SHORTCUT
+# =====================================================================
+# Optional one-word shortcut: typing `autoupdate` in any new PowerShell window runs the local
+# copy in %LOCALAPPDATA%\autoupdate (the same copy the weekly task runs; nothing is fetched)
+$ShortcutLine = 'function autoupdate { & "$env:LOCALAPPDATA\autoupdate\autoupdate.ps1" }'
+
+function Test-Shortcut {
+    (Test-Path -LiteralPath $PROFILE) -and (Test-Path -LiteralPath $LocalCopy) -and
+        (@(Get-Content -LiteralPath $PROFILE -ErrorAction SilentlyContinue) -contains $ShortcutLine)
+}
+
+function Switch-Shortcut {
+    try {
+        $on = Test-Shortcut
+        if (Test-Path -LiteralPath $PROFILE) {
+            @(Get-Content -LiteralPath $PROFILE) | Where-Object { $_ -notmatch '^function autoupdate ' } | Set-Content -LiteralPath $PROFILE
+        }
+        if ($on) {
+            # The weekly task still needs the local copy
+            if ((Get-TaskState) -eq 'off') { Remove-Item -LiteralPath $LocalCopy -Force -ErrorAction SilentlyContinue }
+            Say "  Shortcut removed." 'Green'
+            return
+        }
+        New-Item -ItemType Directory -Path $ToolDir -Force | Out-Null
+        if ($PSCommandPath -and (Test-Path -LiteralPath $PSCommandPath)) {
+            if ($PSCommandPath -ne $LocalCopy) { Copy-Item -LiteralPath $PSCommandPath -Destination $LocalCopy -Force }
+        } else {
+            Invoke-WebRequest -Uri "${ScriptUrl}?$(Get-Random)" -OutFile $LocalCopy -UseBasicParsing
+        }
+        Unblock-File -LiteralPath $LocalCopy -ErrorAction SilentlyContinue
+        if ((Get-ExecutionPolicy -Scope CurrentUser) -in 'Undefined', 'Restricted', 'AllSigned') {
+            Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
+        }
+        if (-not (Test-Path -LiteralPath $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
+        Add-Content -LiteralPath $PROFILE "`n$ShortcutLine"
+        Say "  Shortcut added. In a new PowerShell window, just type: autoupdate" 'Green'
+    } catch {
+        Say "  Could not change the shortcut: $($_.Exception.Message)" 'Red'
+    }
+}
+
+function Show-Settings {
+    while ($true) {
+        $short = if (Test-Shortcut) { 'on' } else { 'off' }
+        Say ""
+        Say "  ---------------- SETTINGS -------------------" 'Cyan'
+        Say ""
+        Say "    1  -  Shortcut 'autoupdate'   [$short]" 'White'
+        Say "    2  -  Back" 'White'
+        Say "    0  -  Quit" 'White'
+        Say ""
+        switch (Read-MenuKey 'Choose 0-2' '012') {
+            '1' { Switch-Shortcut }
+            '2' { return 'back' }
+            '0' { return 'quit' }
+        }
+    }
+}
+
+# =====================================================================
 #  MAIN
 # =====================================================================
 if ($RunMode) {
@@ -592,10 +659,16 @@ while ($true) {
     Say "    1  -  Weekly update   [$(Get-TaskState)]" 'White'
     Say "    2  -  Update now" 'White'
     Say "    3  -  Open log        [last: $lastRun]" 'White'
+    Say "    4  -  Settings" 'White'
     Say "    0  -  Quit" 'White'
     Say ""
-    $choice = Read-MenuKey 'Choose 0-3' '0123' $last
+    $choice = Read-MenuKey 'Choose 0-4' '01234' $last
     if ($choice -eq '0') { break }
+    if ($choice -eq '4') {
+        if (@(Show-Settings) -contains 'quit') { break }
+        Clear-Host
+        continue
+    }
     Say ""
     try {
         switch ($choice) {
