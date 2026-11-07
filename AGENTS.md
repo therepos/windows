@@ -9,7 +9,8 @@ One-click Windows scripts for a non-technical user. Scripts are run straight fro
 - Root: docs only (`AGENTS.md`, `CLAUDE.md`, `README.md`), plus `apps/`, `scripts/`, `.github/`.
 - `apps/<name>.ps1|.bat|.cmd|.py`, flat, one script per tool; `<name>` is one lowercase word
   (the knowledge-base stages are `kbprofile`, `kbrcm`, `kbbundle`; their plan is `apps/kbplan.md`)
-- `scripts/`  repo helpers, never run by users: `sync-blocks.sh` (shared blocks), `lint.sh` (checks and safe fixes)
+- `scripts/`  repo helpers, never run by users: `sync-blocks.sh` (shared blocks), `lint.sh` (checks and safe fixes),
+  `docgen-pages.py` (the GitHub Pages script page, therepos.github.io/windows, built and deployed by CI; nothing is committed)
 
 ## Script format
 
