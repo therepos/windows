@@ -48,7 +48,9 @@ fi
 if [[ -z "$BASE" ]] || (( full )); then FILES=("${ALL[@]}"); fi
 
 REPO_RAW="https://github.com/therepos/windows/raw/main"
-bootstrap() { printf '# irm %s/%s | iex' "$REPO_RAW" "$1"; }
+# ?$(Get-Random) makes GitHub serve the latest copy right after a merge (no 5-minute cache)
+# shellcheck disable=SC2016
+bootstrap() { printf '# irm "%s/%s?$(Get-Random)" | iex' "$REPO_RAW" "$1"; }
 FENCE='# ============================================================================='
 BFENCE=':: ============================================================================'
 

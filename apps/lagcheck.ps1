@@ -1,4 +1,4 @@
-# irm https://github.com/therepos/windows/raw/main/apps/lagcheck.ps1 | iex
+# irm "https://github.com/therepos/windows/raw/main/apps/lagcheck.ps1?$(Get-Random)" | iex
 # Purpose: Find what makes a Windows PC laggy (slow windows, Explorer, Start search) and save one report
 # =============================================================================
 # Usage:

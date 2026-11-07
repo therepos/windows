@@ -1,4 +1,4 @@
-# irm https://github.com/therepos/windows/raw/main/apps/agentprofiler.ps1 | iex
+# irm "https://github.com/therepos/windows/raw/main/apps/agentprofiler.ps1?$(Get-Random)" | iex
 # Purpose: Test what corporate monitoring agents can see during local vs internet file transfers
 # =============================================================================
 # Note:

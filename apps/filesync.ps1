@@ -1,4 +1,4 @@
-# irm https://github.com/therepos/windows/raw/main/apps/filesync.ps1 | iex
+# irm "https://github.com/therepos/windows/raw/main/apps/filesync.ps1?$(Get-Random)" | iex
 # Purpose: Compare two folders by file content, copy what is missing, replace older versions, remove duplicates
 # =============================================================================
 # Usage:
