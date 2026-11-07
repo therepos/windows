@@ -175,14 +175,15 @@ function Get-AppDirs($pkg) {
 }
 
 # Running processes of a package: exe inside one of its folders, or named like the last
-# part of its id (qBittorrent.qBittorrent -> qbittorrent.exe). Nothing from C:\Windows.
+# part of its id (qBittorrent.qBittorrent -> qbittorrent.exe). Nothing from C:\Windows, and
+# no Windows services (session 0): their installers stop and restart those themselves.
 function Get-AppProcesses($pkg, $dirs) {
     $short  = ("$($pkg.Id)" -split '\.')[-1]
     $winDir = $env:windir.TrimEnd('\') + '\'
     @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
         $path = $null
         try { $path = $_.Path } catch {}
-        if (-not $path -or $_.Id -eq $PID) { return $false }
+        if (-not $path -or $_.Id -eq $PID -or $_.SessionId -eq 0) { return $false }
         if ($path.StartsWith($winDir, 'OrdinalIgnoreCase')) { return $false }
         foreach ($d in $dirs) { if ($path.StartsWith($d + '\', 'OrdinalIgnoreCase')) { return $true } }
         return ($_.ProcessName -ieq $short)
@@ -215,9 +216,12 @@ function Close-AppProcesses($procs) {
     foreach ($p in $procs) {
         $parent = (Get-CimInstance Win32_Process -Filter "ProcessId=$($p.Id)" -ErrorAction SilentlyContinue).ParentProcessId
         $path = $null; try { $path = $p.Path } catch {}
-        if ($path -and $ids -notcontains [int]$parent -and -not @($reopen | Where-Object { $_.Path -eq $path }).Count) {
-            $reopen += [pscustomobject]@{ Path = $path; State = (Get-WindowState $p) }
-        }
+        if (-not $path -or $ids -contains [int]$parent -or @($reopen | Where-Object { $_.Path -eq $path }).Count) { continue }
+        # Reopen only what you started (from Start, desktop or startup: parent is explorer) or
+        # what had a window. Background helpers are restarted by their own app or service.
+        $state  = Get-WindowState $p
+        $byUser = (Get-Process -Id $parent -ErrorAction SilentlyContinue).ProcessName -eq 'explorer'
+        if ($byUser -or $state -ne 'hidden') { $reopen += [pscustomobject]@{ Path = $path; State = $state } }
     }
     foreach ($p in $procs) {
         Log "  Closing $($p.ProcessName) (PID $($p.Id))" 'DarkGray'
@@ -258,13 +262,13 @@ function Close-FileUsers($pkg, $dirs, $protect) {
     $apps = @(); $services = @()
     foreach ($u in $users) {
         $path = $null; try { $path = $u.Path } catch {}
-        if ($path -and -not $path.StartsWith($winDir, 'OrdinalIgnoreCase')) {
+        if ($path -and $u.SessionId -ne 0 -and -not $path.StartsWith($winDir, 'OrdinalIgnoreCase')) {
             if ($apps -notcontains $path) { $apps += $path }
         } else {
             $svc  = @(Get-CimInstance Win32_Service -Filter "ProcessId=$($u.Id)" -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
             $stop = @($svc | Where-Object { $StoppableServices -contains $_ })
             if ($stop.Count) { $services += $stop }
-            else { Log "  $($u.ProcessName) (PID $($u.Id)) uses its files but is part of Windows, left open" 'Yellow' }
+            else { Log "  $($u.ProcessName) (PID $($u.Id)) uses its files but is a Windows service, left open" 'Yellow' }
         }
     }
     foreach ($s in @($services | Select-Object -Unique)) {
@@ -275,7 +279,7 @@ function Close-FileUsers($pkg, $dirs, $protect) {
     # Close the whole app (every process of that exe), not only the one holding the file
     $procs = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
         $pp = $null; try { $pp = $_.Path } catch {}
-        $pp -and ($apps -contains $pp) -and ($protect -notcontains $_.Id) })
+        $pp -and ($apps -contains $pp) -and $_.SessionId -ne 0 -and ($protect -notcontains $_.Id) })
     if (-not $procs.Count) { return , @() }
     Log "  Other apps using its files: $((@($procs | ForEach-Object { $_.ProcessName }) | Select-Object -Unique) -join ', ')" 'Yellow'
     Close-AppProcesses $procs
