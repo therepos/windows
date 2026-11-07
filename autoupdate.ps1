@@ -8,7 +8,9 @@
 #   3 = Open log       %LOCALAPPDATA%\autoupdate\update.log
 #   0 = Quit           closes this window
 #  An app that is open is closed first (gracefully, forced after 20 s), updated, then
-#  reopened. A failed update is retried twice (second retry with winget.exe --force).
+#  reopened. A failed update is retried twice (second retry with winget.exe --force);
+#  retries also close other apps that have its files open (e.g. a browser using the OBS
+#  virtual camera) and reopen them after.
 #  'Update now' shows a progress bar; the weekly task runs hidden and shows a Windows
 #  notification with the result when it is done.
 #  Skipped: apps pinned with 'winget pin add <id>', Microsoft Store apps (the Store
@@ -231,6 +233,51 @@ function Close-AppProcesses($procs) {
     , $reopen
 }
 
+# Other apps that have this app's files open, e.g. browsers and video-call apps using the
+# OBS virtual camera (OBS installer code 6). Only done on a retry, since it can close a browser.
+$ExtraDirs = @{ 'OBSProject.OBSStudio' = @("$env:ProgramData\obs-studio-hook") }
+$StoppableServices = @('FrameServer', 'FrameServerMonitor')   # Windows camera service, restarts by itself
+
+function Close-FileUsers($pkg, $dirs, $protect) {
+    $dirs = @(@($dirs) + @($ExtraDirs["$($pkg.Id)"]) | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
+    if (-not $dirs.Count) { return , @() }
+    $winDir = $env:windir.TrimEnd('\') + '\'
+    $users = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        if ($_.Id -le 4 -or $protect -contains $_.Id) { return $false }
+        $mods = $null; try { $mods = $_.Modules } catch {}
+        foreach ($m in $mods) {
+            $f = "$($m.FileName)"
+            foreach ($d in $dirs) { if ($f.StartsWith($d + '\', 'OrdinalIgnoreCase')) { return $true } }
+        }
+        return $false
+    })
+    if (-not $users.Count) { return , @() }
+    $apps = @(); $services = @()
+    foreach ($u in $users) {
+        $path = $null; try { $path = $u.Path } catch {}
+        if ($path -and -not $path.StartsWith($winDir, 'OrdinalIgnoreCase')) {
+            if ($apps -notcontains $path) { $apps += $path }
+        } else {
+            $svc  = @(Get-CimInstance Win32_Service -Filter "ProcessId=$($u.Id)" -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+            $stop = @($svc | Where-Object { $StoppableServices -contains $_ })
+            if ($stop.Count) { $services += $stop }
+            else { Log "  $($u.ProcessName) (PID $($u.Id)) uses its files but is part of Windows, left open" 'Yellow' }
+        }
+    }
+    foreach ($s in @($services | Select-Object -Unique)) {
+        Log "  Stopping Windows service $s (uses its files)" 'DarkGray'
+        Stop-Service -Name $s -Force -ErrorAction SilentlyContinue
+    }
+    if (-not $apps.Count) { return , @() }
+    # Close the whole app (every process of that exe), not only the one holding the file
+    $procs = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        $pp = $null; try { $pp = $_.Path } catch {}
+        $pp -and ($apps -contains $pp) -and ($protect -notcontains $_.Id) })
+    if (-not $procs.Count) { return , @() }
+    Log "  Other apps using its files: $((@($procs | ForEach-Object { $_.ProcessName }) | Select-Object -Unique) -join ', ')" 'Yellow'
+    Close-AppProcesses $procs
+}
+
 # explorer.exe starts the app as the normal user, not as admin like this script
 function Open-Apps($paths) {
     foreach ($path in @($paths | Select-Object -Unique)) {
@@ -259,6 +306,7 @@ function Update-OnePackage($pkg, $protect) {
                 return 'skipped'
             }
             if ($procs.Count) { $reopen += Close-AppProcesses $procs }
+            if ($try -ge 2) { $reopen += Close-FileUsers $pkg $dirs $protect }
 
             $status = ''; $detail = ''; $reboot = $false
             if ($try -lt 3) {
