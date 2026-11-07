@@ -1,3 +1,10 @@
+#!/usr/bin/env python3
+# Purpose: Extract embedded files and attachments from .xlsx .docx .pptx .msg .eml
+# =============================================================================
+# Usage:
+#   python ole-extract.py [file]   or drag a file onto it; with no file it asks for one per line
+# =============================================================================
+
 import importlib, subprocess, sys, os
 
 def ensure(pkg, import_name=None):

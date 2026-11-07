@@ -4,13 +4,22 @@ One-click Windows scripts for a non-technical user. Scripts are run straight fro
 `main` with `irm ... | iex`, so `main` must always work. Proxmox tools live in
 `therepos/proxmox`, MCP servers in `therepos/mcp`, Claude skills in `therepos/skills`.
 
+## Layout
+
+- `<name>.ps1`, `.bat`, `.cmd`, `.py` at the root, one script per tool; `kb/` holds the knowledge-base Python stages
+- `scripts/`  repo helpers: `sync-blocks.sh` (shared blocks), `lint.sh` (checks and safe fixes)
+
 ## Script format
 
 - Prefer `.ps1` run as `irm https://github.com/therepos/windows/raw/main/<name>.ps1 | iex`:
   nothing to download, no SmartScreen warning, no Python needed. Do not keep a `.bat`
   copy of the same script.
-- Line 1 is that one-liner, line 2 is `# Purpose: ...`, then a short header comment
-  listing the menu options and where output goes.
+- Header (see Documentation): line 1 the bootstrap, line 2 `# Purpose:`, then a fence.
+- Shared blocks: regions between `# >>> <name>` and `# <<< <name>` are copies of the blocks in
+  `scripts/sync-blocks.sh` (`say`, `menukey`, `downloads`). Never edit inside the markers; edit the block
+  there, then run it or `scripts/lint.sh --fix`. Per-script code goes outside. Shared look and behaviour
+  belongs in a block, so changing it never touches a script's features.
+- `.ps1` files are ASCII only: Windows PowerShell 5.1 misreads other characters in files without a BOM.
 - Must run in Windows PowerShell 5.1 (no PowerShell 7-only syntax).
 - Ask for admin only when the script needs it. Self-elevate by re-running the one-liner
   in an elevated window (`"${ScriptUrl}?$(Get-Random)"`, note the braces); otherwise run
@@ -43,7 +52,30 @@ One-click Windows scripts for a non-technical user. Scripts are run straight fro
 - File names: `<Kind> <Subject> yyyyMMdd-HHmm`, e.g. `Data System XPS-13-9310 20261102-1430.txt`;
   model names become one word with dashes.
 
+## Documentation
+
+- Header by type, each followed by a fence and optional sections (`# Usage:`, `# Output:`, `# Note:`)
+  closed by a fence:
+  - `.ps1`: line 1 the bootstrap `# irm https://github.com/therepos/windows/raw/main/<name>.ps1 | iex`
+    (or `# pwsh -File .\<name>.ps1` for scripts run locally), line 2 `# Purpose:`
+  - `.bat` / `.cmd`: line 1 `@echo off`, line 2 `:: Purpose:`, `::` fences; CRLF line endings
+  - `.py`: line 1 `#!/usr/bin/env python3`, line 2 `# Purpose:`
+- `# Usage:` lists commands or menu options only: one per line, descriptions aligned in one column, never wrapped.
+  Menu conventions (one keypress, `0 = Quit`) are not repeated in headers.
+- Explanations (how, why, what CI does) live in AGENTS.md, not in script headers.
+- Concise, standard terms (bootstrap, shared block, lint, fence); no filler words.
+- Code comments only where the reason is not obvious, one line each.
+- Refinement: when the owner corrects a name, wording or format, apply it everywhere it occurs in the same
+  PR, record the rule here, and add a lint check when it can be checked mechanically.
+
 ## Before pushing
+
+- `scripts/lint.sh --fix --changed origin/main` must pass. `--fix` repairs the bootstrap, the shared blocks and
+  `.bat`/`.cmd` line endings; fix the rest by hand. Options combine. `--changed` checks every script when
+  `sync-blocks.sh`, `lint.sh` or `ci-lint.yml` changed. Needs `pwsh` and `shellcheck`.
+- CI checks changed scripts on every PR and push (every script weekly, on a manual run, or when those files
+  change) and pushes safe fixes to the PR branch, never to `main`.
+- Work on a branch and open a PR; merge only when lint is green.
 
 - Scripts cannot be run here: say so, and list what the user should test on Windows.
 - Keep diffs small; check quoting (`ConvertTo-Arg` for 7-Zip arguments), `-LiteralPath`

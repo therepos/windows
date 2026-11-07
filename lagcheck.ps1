@@ -1,16 +1,14 @@
 # irm https://github.com/therepos/windows/raw/main/lagcheck.ps1 | iex
 # Purpose: Find what makes a Windows PC laggy (slow windows, Explorer, Start search) and save one report
 # =============================================================================
-#  Lag Check:
-#   1 = Run the check (3-5 minutes, changes nothing)
-#   0 = Quit      closes this window
-#  One keypress picks an option (no Enter). Needs admin (asks once).
-#  Samples CPU / memory / disk / processes, times real actions (open a window,
-#  open files, Start-search query), then reads Windows Search, storage health,
-#  drivers, power, startup items, shell extensions and the event logs.
-#  Output: asks for a folder, defaults to Downloads.
-#          Diag Lag <model> yyyyMMdd-HHmm.txt  - send this file back for analysis.
-#  FLAGS at the top of the report are the auto-detected problems.
+# Usage:
+#   1 = Run the check   3-5 minutes, changes nothing
+#   0 = Quit
+#
+# Note:
+#   Needs admin (asks once)
+#   Samples CPU, memory, disk and processes, times real actions, then reads Search, storage, drivers, power, startup and event logs
+#   Output: Diag Lag <model> yyyyMMdd-HHmm.txt (folder asked, default Downloads); FLAGS at the top are the detected problems
 # =============================================================================
 
 $ScriptUrl = 'https://github.com/therepos/windows/raw/main/lagcheck.ps1'
@@ -31,9 +29,11 @@ $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference    = 'SilentlyContinue'
 $Stamp = Get-Date -Format 'yyyyMMdd-HHmm'
 
+# >>> say
 function Say($msg, $color = 'Gray') { Write-Host $msg -ForegroundColor $color }
+# <<< say
 
-# One keypress picks a menu option (no Enter needed); Enter picks the default, if any
+# >>> menukey
 function Read-MenuKey([string]$Prompt, [string]$Valid, [string]$Default = '') {
     Write-Host "  $Prompt$(if ($Default) { " [$Default]" }): " -NoNewline
     while ($true) {
@@ -41,18 +41,21 @@ function Read-MenuKey([string]$Prompt, [string]$Valid, [string]$Default = '') {
             $k = [Console]::ReadKey($true)
             $c = if ($k.Key -eq 'Enter') { $Default } else { "$($k.KeyChar)" }
         } catch {
+            # No keyboard (input redirected): fall back to a typed line
             $line = [Console]::ReadLine()
             if ($null -eq $line) { throw 'No keyboard input available' }
             $c = $line.Trim(); if (-not $c) { $c = $Default }
         }
         if ($c.Length -eq 1 -and $Valid.Contains($c)) {
             Write-Host $c
+            # Swallow an Enter typed out of habit so it does not reach the next prompt
             Start-Sleep -Milliseconds 300
             try { while ([Console]::KeyAvailable) { [void][Console]::ReadKey($true) } } catch {}
             return $c
         }
     }
 }
+# <<< menukey
 
 function ConvertTo-OneWord([string]$s) {
     $s = ($s -replace '[\\/:*?"<>|]', '').Trim() -replace '\s+', '-'
@@ -69,15 +72,17 @@ function Get-LaptopModel {
     ConvertTo-OneWord $model
 }
 
+# >>> downloads
 function Get-DownloadsFolder {
     $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders'
-    $raw = (Get-ItemProperty -Path $key).'{374DE290-123F-4565-9164-39C4925E467B}'
+    $raw = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).'{374DE290-123F-4565-9164-39C4925E467B}'
     if ($raw) {
         $path = [Environment]::ExpandEnvironmentVariables($raw)
         if (Test-Path -LiteralPath $path) { return $path }
     }
     return (Join-Path $env:USERPROFILE 'Downloads')
 }
+# <<< downloads
 
 function Select-OutputFolder {
     $default = Get-DownloadsFolder

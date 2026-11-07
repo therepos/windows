@@ -1,19 +1,15 @@
 # irm https://github.com/therepos/windows/raw/main/zipper.ps1 | iex
 # Purpose: Zip files into a password-protected 7z (auto-split over 500 MB) or unzip one, split sets included
 # =============================================================================
-#  Zipper:
-#   1 = Zip       files/folders -> YYYYMMDD-HHMMSS (no extension)
-#                 over the split size -> YYYYMMDD-HHMMSS.001, .002, ...
-#   2 = Unzip     archive or any part of a split set -> <name>-extracted
-#   3 = Settings  password, save-to folder, split size (kept between runs;
-#                 password stored encrypted for this Windows user), and the
-#                 'zipper' shortcut, which runs a local copy in %LOCALAPPDATA%\zipper
-#   0 = Quit      closes this window
-#  One keypress picks an option (no Enter). After zipping or unzipping the menu comes
-#  back with the last action as the default, so Enter repeats it.
-#  Password: asked once on first use, then saved. Defaults: Downloads, split at 500 MB.
-#  Uses an installed 7-Zip, otherwise downloads the standalone 7za.exe
-#  into %LOCALAPPDATA%\zipper (no admin needed).
+# Usage:
+#   1 = Zip        files or folders -> YYYYMMDD-HHMMSS (no extension); over the split size -> .001, .002, ...
+#   2 = Unzip      an archive or any part of a split set -> <name>-extracted
+#   3 = Settings   password, save-to folder, split size, and the 'zipper' shortcut (local copy in %LOCALAPPDATA%\zipper)
+#   0 = Quit
+#
+# Note:
+#   Password asked once, saved encrypted for this Windows user. Defaults: Downloads, split at 500 MB
+#   Uses an installed 7-Zip, else downloads 7za.exe into %LOCALAPPDATA%\zipper (no admin)
 # =============================================================================
 
 $DefaultSplitMB  = 500
@@ -23,7 +19,9 @@ $SevenZrUrl      = 'https://www.7-zip.org/a/7zr.exe'
 
 $ProgressPreference = 'SilentlyContinue'
 
+# >>> say
 function Say($msg, $color = 'Gray') { Write-Host $msg -ForegroundColor $color }
+# <<< say
 
 function Format-Size([double]$bytes) {
     if ($bytes -ge 1GB) { return '{0:N1} GB' -f ($bytes / 1GB) }
@@ -103,6 +101,7 @@ function Invoke-SevenZip([string[]]$Arguments) {
 # =====================================================================
 #  INPUT HELPERS
 # =====================================================================
+# >>> downloads
 function Get-DownloadsFolder {
     $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders'
     $raw = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).'{374DE290-123F-4565-9164-39C4925E467B}'
@@ -112,6 +111,7 @@ function Get-DownloadsFolder {
     }
     return (Join-Path $env:USERPROFILE 'Downloads')
 }
+# <<< downloads
 
 # Test-Path that never prints an error, e.g. for text that is not one path ("a" "b")
 function Test-PathQuiet([string]$path, [string]$type = 'Any') {
@@ -119,7 +119,7 @@ function Test-PathQuiet([string]$path, [string]$type = 'Any') {
     try { Test-Path -LiteralPath $path -PathType $type -ErrorAction Stop } catch { $false }
 }
 
-# One keypress picks a menu option (no Enter needed); Enter picks the default, if any
+# >>> menukey
 function Read-MenuKey([string]$Prompt, [string]$Valid, [string]$Default = '') {
     Write-Host "  $Prompt$(if ($Default) { " [$Default]" }): " -NoNewline
     while ($true) {
@@ -141,6 +141,7 @@ function Read-MenuKey([string]$Prompt, [string]$Valid, [string]$Default = '') {
         }
     }
 }
+# <<< menukey
 
 function ConvertFrom-Secure($secure) {
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)

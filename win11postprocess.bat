@@ -1,8 +1,9 @@
 @echo off
-:: =============================================
-:: Post-Fresh Windows Install Automation
-:: Double-click to run - auto-elevates to Admin
-:: =============================================
+:: Purpose: Apply post-install settings to a fresh Windows 11 install
+:: ============================================================================
+:: Note:
+::   Double-click to run; asks for admin
+:: ============================================================================
 
 :: --- Self-elevate to Admin if needed ---
 net session >nul 2>&1

@@ -1,7 +1,12 @@
-# Purpose: Stage 3. Build one markdown bundle per engagement for the AI to read, a regex draft of the registry, and ingest the AI's answers.
-#   python kb_bundle.py [--db kb.db] [--years 2015-2026]      # writes bundles/<client>__<engagement>.md and registry_draft.csv
-#   python kb_bundle.py --schema                               # the JSON record the AI should write per engagement into registry.jsonl
-#   python kb_bundle.py --ingest registry.jsonl                # loads the JSONL into table registry
+#!/usr/bin/env python3
+# Purpose: Stage 3: one markdown bundle per engagement for the AI, a regex draft of the registry, and ingest of the AI's answers
+# =============================================================================
+# Usage:
+#   python kb_bundle.py [--db kb.db] [--years 2015-2026]   write bundles/<client>__<engagement>.md and registry_draft.csv
+#   python kb_bundle.py --schema                            the JSON record the AI writes per engagement into registry.jsonl
+#   python kb_bundle.py --ingest registry.jsonl             load the JSONL into table registry
+# =============================================================================
+
 import sqlite3, argparse, re, os, json, csv
 from collections import defaultdict
 

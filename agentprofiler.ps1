@@ -1,12 +1,9 @@
 # irm https://github.com/therepos/windows/raw/main/agentprofiler.ps1 | iex
 # Purpose: Test what corporate monitoring agents can see during local vs internet file transfers
 # =============================================================================
-#  LOCAL vs INTERNET MONITORING TEST
-#   Answers: which agents react to local vs internet transfers, and what can
-#   each one actually capture (IO spike != content inspection)?
-#   Output: monitoring_test_log_<timestamp>.txt on the Desktop.
-#
-#  No Python required. Uses only built-in Windows PowerShell.
+# Note:
+#   Runs once, no menu: which agents react, and what each can capture (IO spike != content inspection)
+#   Output: monitoring_test_log_<timestamp>.txt on the Desktop
 # =============================================================================
 
 $ScriptUrl = 'https://github.com/therepos/windows/raw/main/agentprofiler.ps1'

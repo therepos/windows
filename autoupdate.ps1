@@ -1,26 +1,20 @@
 # irm https://github.com/therepos/windows/raw/main/autoupdate.ps1 | iex
 # Purpose: Update all apps with winget every Sunday 23:45, closing open apps first and reopening them after
 # =============================================================================
-#  Auto Update:
-#   1 = Weekly update  on/off. A scheduled task runs Sundays 23:45 (or as soon as the
-#                      PC is on again if it was off or asleep then)
-#   2 = Update now     same update, in this window
-#   3 = Open log       %LOCALAPPDATA%\autoupdate\update.log
-#   4 = Settings       the 'autoupdate' shortcut: type autoupdate in any new PowerShell
-#                      window to run the local copy in %LOCALAPPDATA%\autoupdate
-#   0 = Quit           closes this window
-#  An app that is open is closed first (gracefully, forced after 20 s), updated, then
-#  reopened minimized if it was minimized or in the tray. A failed update is retried twice (second retry with winget.exe --force);
-#  retries also close other apps that have its files open (e.g. a browser using the OBS
-#  virtual camera) and reopen them after.
-#  'Update now' shows a bar under the app being updated (apps done of total, plus a
-#  spinner and the time taken for that app). The weekly task runs hidden and shows a Windows
-#  notification with the result when it is done.
-#  Skipped: apps pinned with 'winget pin add <id>', Microsoft Store apps (the Store
-#  updates those itself).
-#  Needs admin (asks). Installs the Microsoft.WinGet.Client module if missing.
-#  The task runs a local copy in %LOCALAPPDATA%\autoupdate (not fetched each week);
-#  turning the weekly update on again refreshes that copy.
+# Usage:
+#   1 = Weekly update   on/off; scheduled task Sundays 23:45, or at next start if missed
+#   2 = Update now      same update, in this window
+#   3 = Open log        %LOCALAPPDATA%\autoupdate\update.log
+#   4 = Settings        'autoupdate' shortcut (runs the local copy in %LOCALAPPDATA%\autoupdate)
+#   0 = Quit
+#
+# Note:
+#   Open apps are closed first (forced after 20 s), updated, then reopened as they were (minimized or tray)
+#   A failed update is retried twice (second with winget --force), closing apps that hold its files
+#   Update now shows a bar per app; the weekly task runs hidden and ends with a notification
+#   Skipped: apps pinned with 'winget pin add <id>', and Microsoft Store apps
+#   Needs admin (asks); installs Microsoft.WinGet.Client if missing
+#   The task runs a local copy; turning the weekly update on again refreshes it
 # =============================================================================
 
 $ScriptUrl = 'https://github.com/therepos/windows/raw/main/autoupdate.ps1'
@@ -64,7 +58,7 @@ function Log($msg, $color = 'Gray') {
     } catch {}
 }
 
-# One keypress picks a menu option (no Enter needed); Enter picks the default, if any
+# >>> menukey
 function Read-MenuKey([string]$Prompt, [string]$Valid, [string]$Default = '') {
     Write-Host "  $Prompt$(if ($Default) { " [$Default]" }): " -NoNewline
     while ($true) {
@@ -86,6 +80,7 @@ function Read-MenuKey([string]$Prompt, [string]$Valid, [string]$Default = '') {
         }
     }
 }
+# <<< menukey
 
 # =====================================================================
 #  WINGET

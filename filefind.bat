@@ -1,8 +1,9 @@
 @echo off
-REM ============================================================
-REM  File Finder - Double-click to run
-REM  Edit settings below with Notepad (right-click > Edit)
-REM ============================================================
+:: Purpose: Find files whose names contain keywords under a folder (settings at #POWERSHELL_START)
+:: ============================================================================
+:: Note:
+::   Double-click to run; edit the settings in Notepad (right-click > Edit)
+:: ============================================================================
 
 REM -- Extract PowerShell script from this file and run it --
 setlocal enabledelayedexpansion

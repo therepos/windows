@@ -1,9 +1,10 @@
-"""
-Purpose: Export VBA modules, ribbon XML, and .xlam from your Excel add-in.
-Usage: Double-click to run.
-Note: Scans installed add-in paths AND the script's own folder.
-      Bypass Excel trust setting.
-"""
+#!/usr/bin/env python3
+# Purpose: Export VBA modules, ribbon XML and the .xlam from your Excel add-in
+# =============================================================================
+# Note:
+#   Double-click to run. Scans installed add-in paths and the script's own folder
+#   Bypasses the Excel trust setting
+# =============================================================================
 
 import os
 import re

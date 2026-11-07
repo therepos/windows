@@ -1,35 +1,17 @@
 # irm https://github.com/therepos/windows/raw/main/filemap.ps1 | iex
 # Purpose: List every file in a folder and its subfolders, as a text list or a clickable Excel index
 # =============================================================================
-#  File Map:
-#   1 = List    every file (relative path, size, modified), sorted, one per line
-#               -> filemap <PC> yyyyMMdd-HHmm.txt
-#               for comparing two machines (e.g. paste both lists into an AI)
-#   2 = Index   every file with clickable links to the file and its folder
-#               -> filemap <PC> yyyyMMdd-HHmm.csv (opens in Excel)
-#               mapped drives are written as \\server\share paths so links
-#               work for anyone with access; over ~1 million files it splits
-#               into ...-a.csv, ...-b.csv, ...
+# Usage:
+#   1 = List    every file (path, size, modified), one per line -> filemap <PC> yyyyMMdd-HHmm.txt
+#   2 = Index   every file with clickable file and folder links -> filemap <PC> yyyyMMdd-HHmm.csv
 #   0 = Quit
-#  Output: Downloads. Hidden and system files are included; folders that
-#  cannot be opened are listed at the end. Read-only: nothing is changed,
-#  no admin, no downloads.
 #
-#  If GitHub is blocked on the PC:
-#   - Copy this whole file into Notepad, Save as type "All files", name it
-#     filemap.ps1. In PowerShell, in that folder, run:
-#       powershell -ExecutionPolicy Bypass -File .\filemap.ps1
-#     (no admin; the bypass lasts for this one run only)
-#   - If that is blocked too: open PowerShell ISE, paste into a new tab, press F5.
-#   - Do not paste it into a normal PowerShell window: the lines after the
-#     menu get eaten as answers to its prompts.
-#
-#  No PowerShell at all? Plain list from Command Prompt (cmd), into Downloads:
-#     chcp 65001
-#     dir "C:\Some Folder" /s /b /a-d > "%USERPROFILE%\Downloads\filelist.txt"
-#   /s = include subfolders, /b = full paths only, /a-d = all files incl. hidden.
-#   Drop /b to also get sizes and dates (grouped per folder, harder to compare).
-#   chcp 65001 keeps non-English file names readable.
+# Note:
+#   Output: Downloads. Read-only, no admin. Hidden and system files included; unreadable folders listed last
+#   Index writes mapped drives as \\server\share so links work for others; over ~1M files it splits (-a, -b, ...)
+#   GitHub blocked: save this file as filemap.ps1, then: powershell -ExecutionPolicy Bypass -File .\filemap.ps1
+#   Or paste it into PowerShell ISE and press F5 (not a normal PowerShell window: later lines become answers)
+#   No PowerShell: chcp 65001, then dir "C:\Folder" /s /b /a-d > "%USERPROFILE%\Downloads\filelist.txt"
 # =============================================================================
 
 $ErrorActionPreference = 'Continue'
@@ -38,7 +20,9 @@ $ProgressPreference    = 'SilentlyContinue'
 $Stamp   = Get-Date -Format 'yyyyMMdd-HHmm'
 $MaxRows = 1048000                      # Excel limit is 1,048,576 rows per sheet
 
+# >>> say
 function Say($msg, $color = 'Gray') { Write-Host $msg -ForegroundColor $color }
+# <<< say
 
 function Format-Size([double]$bytes) {
     if ($bytes -ge 1GB) { return '{0:N1} GB' -f ($bytes / 1GB) }
@@ -46,6 +30,7 @@ function Format-Size([double]$bytes) {
     return '{0:N0} KB' -f [Math]::Ceiling($bytes / 1KB)
 }
 
+# >>> downloads
 function Get-DownloadsFolder {
     $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders'
     $raw = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).'{374DE290-123F-4565-9164-39C4925E467B}'
@@ -55,6 +40,7 @@ function Get-DownloadsFolder {
     }
     return (Join-Path $env:USERPROFILE 'Downloads')
 }
+# <<< downloads
 
 function Read-TargetFolder {
     $default = Get-DownloadsFolder
