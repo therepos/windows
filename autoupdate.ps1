@@ -385,8 +385,9 @@ function Invoke-WinGetUpdate($params) {
         Wait-WithSpinner ({ $handle.IsCompleted }.GetNewClosure())
         $out = $ps.EndInvoke($handle)
         if ($out.Count) {
-            $o = $out[$out.Count - 1].BaseObject
-            if ($o -is [hashtable]) { return $o }
+            # Note: .BaseObject on a wrapped hashtable is read as a key (null), so use -is / cast
+            $o = $out[$out.Count - 1]
+            if ($o -is [hashtable]) { return [hashtable]$o }
         }
         $msg = if ($ps.Streams.Error.Count) { "$($ps.Streams.Error[0])" } else { 'no result from winget' }
         return @{ Status = 'Error'; Reboot = $false; Code = ''; Error = $msg }
