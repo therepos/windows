@@ -1,39 +1,25 @@
 # irm https://github.com/therepos/windows/raw/main/filesync.ps1 | iex
 # Purpose: Compare two folders by file content, copy what is missing, replace older versions, remove duplicates
 # =============================================================================
-#  File Sync:
-#   1 = Compare A and B   count the files in A and B; each list can be viewed a page at a
-#                         time or saved as Report FileSync yyyyMMdd-HHmm.txt in Downloads
-#   2 = Add: A -> B       copy the files B does not have
-#   3 = Add: B -> A       copy the files A does not have
+# Usage:
+#   1 = Compare A and B   count files in A and B; view a page at a time or save a report to Downloads
+#   2 = Add: A -> B       copy files B does not have
+#   3 = Add: B -> A       copy files A does not have
 #   4 = Add: A <> B       2 and 3 together; never replaces a file
-#   5 = Replace: A -> B   same file name in the same place but newer in A: replace B's copy
-#   6 = Replace: B -> A   same file name in the same place but newer in B: replace A's copy
-#   7 = Sync              add missing files both ways, then replace every older copy
-#                         with the newer one, so A and B end up the same
-#                         (same date but different content: always left alone)
-#   8 = Duplicates  find identical files inside A or inside B, keep the oldest
-#                   copy of each and send the rest to the Recycle Bin
-#   9 = Settings    change Folder A or Folder B, and the 'filesync' shortcut,
-#                   which runs a local copy in %LOCALAPPDATA%\filesync
-#   0 = Quit        closes this window
-#  Two files are the same file when their name, size and contents (SHA-256) match,
-#  whatever folder they sit in. So a file that B keeps in a different folder is not
-#  "missing" and is never copied again. Only files whose name and size appear on the
-#  other side have their contents read, so most runs stay quick.
-#  Options 2-4 never replace a file; only Replace (5-6) and Sync (7) do,
-#  and only an older copy with a newer one, after showing the list and asking.
-#  Only Duplicates (8) deletes, and only to the Recycle Bin, after showing the list
-#  and asking. Network and mapped drives have no Recycle Bin, so there it warns
-#  that the delete is permanent and asks you to type yes.
-#  OneDrive / SharePoint folders work too; online-only files are downloaded when
-#  read or copied. Local, network and mapped drives are fine, and so are paths
-#  longer than 260 characters.
-#  One keypress picks an option (no Enter). After each action the menu comes
-#  back with the last action as the default, so Enter repeats it. Before a copy,
-#  replace or delete the first 10 files are shown; v on the y/n/v prompt shows all.
-#  Folders are asked each run and not saved (fine on a shared PC); they are
-#  kept only while this window is open. No admin, no downloads.
+#   5 = Replace: A -> B   newer in A, same name and place: replace B's copy
+#   6 = Replace: B -> A   newer in B, same name and place: replace A's copy
+#   7 = Sync              add both ways, then replace every older copy (same date, different content: left alone)
+#   8 = Duplicates        identical files inside A or B: keep the oldest, the rest to the Recycle Bin
+#   9 = Settings          Folder A, Folder B, and the 'filesync' shortcut (local copy in %LOCALAPPDATA%\filesync)
+#   0 = Quit
+#
+# Note:
+#   Same file = same name, size and SHA-256 in any folder; contents are read only for name and size matches
+#   Only Replace, Sync and Duplicates change existing files, always after listing them and asking
+#   Duplicates uses the Recycle Bin; network and mapped drives have none, so it asks you to type yes
+#   Works with OneDrive and SharePoint (online-only files download), network drives, paths over 260 chars
+#   Before a change the first 10 files are shown; v at the y/n/v prompt shows all
+#   Folders are kept only while the window is open (fine on a shared PC). No admin, no downloads
 # =============================================================================
 
 $ToolDir      = Join-Path $env:LOCALAPPDATA 'filesync'
@@ -44,7 +30,9 @@ $PageSize     = 40                      # lines per page when viewing a full lis
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
 
+# >>> say
 function Say($msg, $color = 'Gray') { Write-Host $msg -ForegroundColor $color }
+# <<< say
 
 # =====================================================================
 #  INPUT HELPERS
@@ -56,7 +44,7 @@ function Test-PathQuiet([string]$path, [string]$type = 'Any') {
     try { Test-Path -LiteralPath $path -PathType $type -ErrorAction Stop } catch { $false }
 }
 
-# One keypress picks a menu option (no Enter needed); Enter picks the default, if any
+# >>> menukey
 function Read-MenuKey([string]$Prompt, [string]$Valid, [string]$Default = '') {
     Write-Host "  $Prompt$(if ($Default) { " [$Default]" }): " -NoNewline
     while ($true) {
@@ -78,6 +66,7 @@ function Read-MenuKey([string]$Prompt, [string]$Valid, [string]$Default = '') {
         }
     }
 }
+# <<< menukey
 
 # Typed or dragged folder -> full path without a trailing slash, or $null (reason shown)
 function Resolve-Folder([string]$answer) {
@@ -102,6 +91,7 @@ function Test-Overlap([string]$a, [string]$b) {
     $a.StartsWith($b, [StringComparison]::OrdinalIgnoreCase) -or $b.StartsWith($a, [StringComparison]::OrdinalIgnoreCase)
 }
 
+# >>> downloads
 function Get-DownloadsFolder {
     $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders'
     $raw = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).'{374DE290-123F-4565-9164-39C4925E467B}'
@@ -111,6 +101,7 @@ function Get-DownloadsFolder {
     }
     return (Join-Path $env:USERPROFILE 'Downloads')
 }
+# <<< downloads
 
 function Format-Size([long]$bytes) {
     if ($bytes -ge 1GB) { return '{0:N1} GB' -f ($bytes / 1GB) }

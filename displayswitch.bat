@@ -1,4 +1,9 @@
 @echo off
+:: Purpose: Toggle between the laptop screen only and extended displays
+:: ============================================================================
+:: Note:
+::   Double-click to switch; the last state is kept in %LOCALAPPDATA%\DisplayToggle
+:: ============================================================================
 setlocal
 
 set STATE_DIR=%LOCALAPPDATA%\DisplayToggle

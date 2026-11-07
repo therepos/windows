@@ -1,22 +1,27 @@
-# Purpose: offline text extractor. Reads the extraction shortlist, pulls text and tables out of each file on the share into one SQLite database with full-text search. No AI, no internet.
-# Run with the Python that passed checkenv.py, from the folder holding extraction_shortlist.xlsx.
+#!/usr/bin/env python3
+# Purpose: Offline text extractor: text and tables from each shortlisted file on the share into one SQLite database with full-text search
+# =============================================================================
+# Usage:
+#   python extractfiles.py                                everything pending in .\extraction_shortlist.xlsx -> .\kb.db, resumable
+#   python extractfiles.py --limit 30                     test run: first 30 pending files
+#   python extractfiles.py --workers 4                    parallel workers, each with its own Word instance (default 3)
+#   python extractfiles.py --only RCM,"Audit programme"   only these DocType values
+#   python extractfiles.py --minconf 2                    skip confidence-1 rows (drafts, weak keyword types)
+#   python extractfiles.py --retry-errors                 re-attempt rows that errored last time
+#   python extractfiles.py --redo-crude                   re-attempt Word files that only got the raw-text fallback
+#   python extractfiles.py --soffice "<path>\soffice.exe" LibreOffice in an unusual location
+#   python extractfiles.py --stats                        progress by type and status, then exit
+#   python extractfiles.py --search "revenue cut-off"     try the full-text index
 #
-#   python extractfiles.py                                # everything pending in .\extraction_shortlist.xlsx -> .\kb.db, resumable
-#   python extractfiles.py --limit 30                     # test run: first 30 pending files
-#   python extractfiles.py --workers 4                    # parallel workers, each with its own Word instance (default 3)
-#   python extractfiles.py --only RCM,"Audit programme"   # only these DocType values
-#   python extractfiles.py --minconf 2                    # skip confidence-1 rows (drafts, weak keyword types)
-#   python extractfiles.py --retry-errors                 # re-attempt rows that errored last time
-#   python extractfiles.py --redo-crude                   # re-attempt Word files that only got the raw-text fallback (after installing LibreOffice)
-#   python extractfiles.py --soffice "C:\Program Files\LibreOffice\program\soffice.exe"   # if LibreOffice is somewhere unusual
-#   python extractfiles.py --stats                        # progress by type and status, then exit
-#   python extractfiles.py --search "revenue cut-off"     # try the full-text index
+# Output:
+#   kb.db         docs (one row per file), parts (text pieces), parts_fts (FTS5)
+#   extract.log   start/stop, 5-minute summaries, one line per failed file (worker noise: tmp_extract\worker_*.log)
 #
-# Ctrl+C at any time: everything finished so far is committed. Re-run the same command to continue.
-# Output: kb.db  tables docs (one row per file, status), parts (text pieces: body/table/sheet/slide/page/email), parts_fts (FTS5).
-#         extract.log  start/stop, 5-minute summaries, one line per failed file. Library noise from workers goes to tmp_extract\worker_*.log.
-# Old .doc/.rtf/.ppt are first bulk-converted by LibreOffice, 40 files per launch (phase 1), which is far faster than one launch per
-# file; anything that fails there goes through Word/PowerPoint, then single-file LibreOffice, then raw text (phase 2).
+# Note:
+#   Run with the Python that passed checkenv.py, from the folder holding extraction_shortlist.xlsx; no AI, no internet
+#   Ctrl+C commits everything finished; re-run the same command to continue
+#   Old .doc/.rtf/.ppt: bulk LibreOffice (40 per launch), then Word/PowerPoint, single-file LibreOffice, raw text
+# =============================================================================
 
 import sys, os, io, re, json, time, shutil, sqlite3, argparse, subprocess, threading, queue, datetime, traceback
 

@@ -1,0 +1,86 @@
+name: Lint
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '17 19 * * 6'   # weekly full check, Sunday 03:17 Singapore time
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: 'What to check'
+        type: choice
+        options: [all, changed]
+        default: all
+
+# Scope: PRs and pushes check only the scripts they change (every script if a
+# file in FULL_CHECK_TRIGGERS in scripts/lint.sh changed). Manual runs default
+# to every script; the weekly run always checks every script.
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    # bot pushes are skipped, except the re-run this job dispatches after a fix
+    if: github.actor != 'github-actions[bot]' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # on a PR, check out the branch itself so fixes can be pushed to it
+          ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Install shellcheck
+        run: command -v shellcheck || sudo apt-get install -y -qq shellcheck
+
+      - name: Decide what to check
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+          SCOPE: ${{ inputs.scope }}
+        run: |
+          case "$EVENT" in
+            pull_request) args="--changed origin/$BASE_REF" ;;
+            push)
+              if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+                 && git cat-file -e "$BEFORE" 2>/dev/null; then
+                args="--changed $BEFORE"
+              else
+                args=""
+              fi ;;
+            workflow_dispatch)
+              if [ "$SCOPE" = "changed" ]; then args="--changed origin/main"; else args=""; fi ;;
+            *) args="" ;;
+          esac
+          echo "args=$args" >> "$GITHUB_OUTPUT"
+          echo "Lint scope: ${args:-every script}"
+
+      # Fixes are only applied to PR branches (never pushed to main); elsewhere this
+      # job only reports.
+      - name: Fix what can be fixed safely
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        run: bash scripts/lint.sh --fix ${{ steps.scope.outputs.args }} || true
+
+      - name: Commit fixes
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -am "lint: auto-fix bootstrap lines, shared blocks and line endings"
+            git pull --rebase
+            git push
+            # a push made with GITHUB_TOKEN starts no workflow, so the fixed commit
+            # would have no lint result; start one so required checks can pass
+            gh workflow run ci-lint.yml --ref "$BRANCH"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.head_ref }}
+
+      - name: Lint
+        run: bash scripts/lint.sh ${{ steps.scope.outputs.args }}

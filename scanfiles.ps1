@@ -1,28 +1,28 @@
+# pwsh -File .\scanfiles.ps1
+# Purpose: Inventory every file on a share into per-folder CSVs, resumable and verified against robocopy
+# =============================================================================
+# Usage:
+#   pwsh -File .\scanfiles.ps1                              scan everything, resume if interrupted
+#   pwsh -File .\scanfiles.ps1 -Only "Folder1","Folder2"    rescan just these top folders from scratch
+#   pwsh -File .\scanfiles.ps1 -Force                       rescan everything from scratch
+#   pwsh -File .\scanfiles.ps1 -NoPrecount                  skip the robocopy pre-count (no ETA; verify still runs)
+#   pwsh -File .\scanfiles.ps1 -Exclude "~snapshot","Temp"  top folders to skip (default: snapshot and system folders)
+#   pwsh -File .\scanfiles.ps1 -IncludeHidden               also scan hidden top folders (skipped by default: robocopy hangs)
+#
+# Output (.\scan_output\):
+#   <TopFolder>.csv, _01.csv ...    one CSV per top folder, split at -RowsPerPart rows (default 250,000)
+#   <TopFolder>_NN.part             part being written (do not open)
+#   progress.csv                    per-folder status and resume checkpoint
+#   rc_counts.csv, reconcile.csv    robocopy counts, and PowerShell vs robocopy per folder
+#   errors.txt                      TopFolder <TAB> Path <TAB> Reason
+#
+# Note:
+#   Needs PowerShell 7 (portable zip: github.com/PowerShell/PowerShell/releases) and full read rights
+#   Ctrl+C trims the current part to the last finished folder; re-run the same command to continue
+#   Done when reconcile.csv shows Status=OK for every folder and errors.txt is empty
+# =============================================================================
+
 #Requires -Version 7
-# ===== STAGE 1: COMPLETE INVENTORY + VERIFICATION (resumable, chunked) =====
-# Run with PowerShell 7 (pwsh.exe) on a PC on the LAN, using an account with full read rights.
-# Portable pwsh: https://github.com/PowerShell/PowerShell/releases (zip, no admin needed)
-#
-#   pwsh -File .\scanfiles.ps1                                # scan everything, resume if interrupted
-#   pwsh -File .\scanfiles.ps1 -Only "AStar","BW Maritime"    # rescan just these top folders from scratch
-#   pwsh -File .\scanfiles.ps1 -Force                         # rescan everything from scratch
-#   pwsh -File .\scanfiles.ps1 -NoPrecount                    # skip the robocopy pre-count (no ETA; verify still runs at the end)
-#   pwsh -File .\scanfiles.ps1 -Exclude "~snapshot","Temp"    # top-level folders to leave out (default: snapshot/system folders)
-#   pwsh -File .\scanfiles.ps1 -IncludeHidden                 # also scan hidden top-level folders (skipped by default, robocopy tends to hang on them)
-#
-# Output goes to .\scan_output\ next to this script:
-#   <TopFolder>.csv              one CSV per top-level folder (own header, opens in Excel)
-#   <TopFolder>_01.csv, _02.csv  same folder split at -RowsPerPart rows (default 250,000)
-#   <TopFolder>_NN.part          the part currently being written (do not open in Excel)
-#   progress.csv                 per-folder status + resume checkpoint (human readable)
-#   rc_counts.csv                robocopy file/byte counts (independent engine)
-#   reconcile.csv                PowerShell count vs robocopy count per folder
-#   errors.txt                   TopFolder <TAB> Path <TAB> Reason
-#
-# Ctrl+C at any time: the current part is trimmed to the last fully-scanned directory and progress.csv
-# is saved. Re-run the same command to continue from exactly there. Nothing is redone.
-#
-# DONE = reconcile.csv shows Status=OK for every folder AND errors.txt is empty.
 
 param(
     [string[]]$Only = @(),

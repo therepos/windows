@@ -1,14 +1,14 @@
 # irm https://github.com/therepos/windows/raw/main/systeminfo.ps1 | iex
 # Purpose: Collect raw hardware/software info from a Windows laptop and/or Android phone
 # =============================================================================
-#  System Info Collector:
+# Usage:
 #   1 = Windows laptop
 #   2 = Android phone
 #   3 = Both
-#   0 = Quit      closes this window
-#  One keypress picks an option (no Enter).
-#  Output: asks for a folder, defaults to Downloads.
+#   0 = Quit
 #
+# Note:
+#   Output: folder asked, default Downloads
 # =============================================================================
 
 $ScriptUrl = 'https://github.com/therepos/windows/raw/main/systeminfo.ps1'
@@ -49,9 +49,11 @@ function Get-LaptopModel {
     ConvertTo-OneWord $model
 }
 
+# >>> say
 function Say($msg, $color = 'Gray') { Write-Host $msg -ForegroundColor $color }
+# <<< say
 
-# One keypress picks a menu option (no Enter needed); Enter picks the default, if any
+# >>> menukey
 function Read-MenuKey([string]$Prompt, [string]$Valid, [string]$Default = '') {
     Write-Host "  $Prompt$(if ($Default) { " [$Default]" }): " -NoNewline
     while ($true) {
@@ -73,16 +75,19 @@ function Read-MenuKey([string]$Prompt, [string]$Valid, [string]$Default = '') {
         }
     }
 }
+# <<< menukey
 
+# >>> downloads
 function Get-DownloadsFolder {
     $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders'
-    $raw = (Get-ItemProperty -Path $key).'{374DE290-123F-4565-9164-39C4925E467B}'
+    $raw = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).'{374DE290-123F-4565-9164-39C4925E467B}'
     if ($raw) {
         $path = [Environment]::ExpandEnvironmentVariables($raw)
-        if (Test-Path $path) { return $path }
+        if (Test-Path -LiteralPath $path) { return $path }
     }
     return (Join-Path $env:USERPROFILE 'Downloads')
 }
+# <<< downloads
 
 function Select-OutputFolder {
     $default = Get-DownloadsFolder

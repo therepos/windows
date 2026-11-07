@@ -1,5 +1,10 @@
-# Purpose: Stage 1 sanity profile of kb.db: coverage per engagement, scanned PDFs without a text twin, RCMs found by content, processes.
+#!/usr/bin/env python3
+# Purpose: Stage 1 sanity profile of kb.db: coverage per engagement, scanned PDFs without a text twin, RCMs by content, processes
+# =============================================================================
+# Usage:
 #   python kb_profile.py [--db kb.db] [--out kb_profile.xlsx]
+# =============================================================================
+
 import sqlite3, argparse, re, os
 from collections import defaultdict, Counter
 from openpyxl import Workbook

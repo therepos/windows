@@ -1,9 +1,10 @@
 @echo off
+:: Purpose: Install or remove Office add-ins (.xlam, .ppam, .dotm) placed next to this file
+:: ============================================================================
+:: Note:
+::   Double-click to run. No Python needed
+:: ============================================================================
 setlocal EnableDelayedExpansion
-:: ============================================================
-::  Office Add-in Manager (Install / Remove)
-::  Double-click to run. No Python needed.
-:: ============================================================
 
 set "PS_TEMP=%TEMP%\addin-mgr-%RANDOM%.ps1"
 

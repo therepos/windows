@@ -3,7 +3,7 @@
 One-click Windows scripts.
 
 - `.bat` / `.cmd`: download and double-click.
-- `.ps1`: run the `irm https://github.com/therepos/windows/raw/main/<name>.ps1 | iex` line from the file header in PowerShell.
+- `.ps1`: run the bootstrap on line 1 of the file (`irm https://github.com/therepos/windows/raw/main/<name>.ps1 | iex`) in PowerShell.
 - `.py`: run with Python 3.
 
 ## One-word shortcuts (optional)
@@ -24,3 +24,18 @@ Remove them:
 ```
 
 Kept per Windows user, per PC.
+
+## Structure
+
+```
+windows
+├── AGENTS.md               # rules for AI agents
+├── CLAUDE.md               # @AGENTS.md
+├── .github
+│   └── workflows           # lint on every PR and push
+├── *.ps1 *.bat *.cmd *.py  # one script per tool
+├── kb                      # knowledge-base stages (Python)
+└── scripts
+    ├── sync-blocks.sh      # shared blocks (say, menukey, downloads), synced into every script
+    └── lint.sh             # checks scripts against AGENTS.md (--fix repairs what it can)
+```

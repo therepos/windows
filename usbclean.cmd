@@ -1,4 +1,9 @@
 @echo off
+:: Purpose: Erase a USB drive with diskpart clean (asks for the disk number, then YES)
+:: ============================================================================
+:: Note:
+::   Double-click to run; asks for admin. Everything on the chosen disk is erased
+:: ============================================================================
 net session >nul 2>&1
 if %errorlevel% neq 0 (
   powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process '%~f0' -Verb RunAs"

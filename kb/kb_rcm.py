@@ -1,5 +1,11 @@
-# Purpose: Stage 2. Parse RCM / audit programme tables in kb.db into rows (risk, control, test procedure) -> table rcm_rows and rcm_rows.xlsx.
-#   python kb_rcm.py [--db kb.db] [--types "RCM,Audit programme"] [--include-hidden]   (--include-hidden also parses RCM-like tables in other doc types)
+#!/usr/bin/env python3
+# Purpose: Stage 2: parse RCM and audit programme tables in kb.db into rows (risk, control, test) -> rcm_rows and rcm_rows.xlsx
+# =============================================================================
+# Usage:
+#   python kb_rcm.py [--db kb.db] [--types "RCM,Audit programme"]   parse those doc types
+#   python kb_rcm.py --include-hidden                                also parse RCM-like tables in other doc types
+# =============================================================================
+
 import sqlite3, argparse, re
 from collections import Counter
 from openpyxl import Workbook

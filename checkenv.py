@@ -1,7 +1,12 @@
-# Purpose: check a Windows PC can run the offline text extractor (Python, libraries, .doc converters, long paths, share access).
-#   python checkenv.py                       # report only
-#   python checkenv.py --install             # also pip-install any missing Python libraries
-#   python checkenv.py --share \\server\share  # also test reading the share and a long path
+#!/usr/bin/env python3
+# Purpose: Check a Windows PC can run the offline text extractor (Python, libraries, .doc converters, long paths, share access)
+# =============================================================================
+# Usage:
+#   python checkenv.py                         report only
+#   python checkenv.py --install               also pip-install any missing libraries
+#   python checkenv.py --share \\server\share   also test reading the share and a long path
+# =============================================================================
+
 import sys, os, subprocess, shutil, importlib, platform, ctypes, glob
 
 OK, BAD, WARN = "  ok   ", "  FAIL ", "  warn "
