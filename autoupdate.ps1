@@ -168,10 +168,13 @@ function Get-AppDirs($pkg) {
             }
         }
     }
-    $portable = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
-    Get-ChildItem -LiteralPath $portable -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name.StartsWith("$($pkg.Id)_", 'OrdinalIgnoreCase') } |
-        ForEach-Object { if (-not $dirs.Contains($_.FullName)) { $dirs.Add($_.FullName) } }
+    # Zip-based apps (e.g. adb.exe from Platform-Tools): per-user and machine-wide folders
+    foreach ($portable in @((Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'),
+                            "$env:ProgramFiles\WinGet\Packages", "${env:ProgramFiles(x86)}\WinGet\Packages")) {
+        Get-ChildItem -LiteralPath $portable -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name.StartsWith("$($pkg.Id)_", 'OrdinalIgnoreCase') } |
+            ForEach-Object { if (-not $dirs.Contains($_.FullName)) { $dirs.Add($_.FullName) } }
+    }
     , $dirs.ToArray()
 }
 
