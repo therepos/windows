@@ -11,7 +11,7 @@
 #  reopened minimized if it was minimized or in the tray. A failed update is retried twice (second retry with winget.exe --force);
 #  retries also close other apps that have its files open (e.g. a browser using the OBS
 #  virtual camera) and reopen them after.
-#  'Update now' shows a progress bar (apps done of total); the weekly task runs hidden and shows a Windows
+#  'Update now' shows a progress bar (apps done of total, spinner and time for the current app); the weekly task runs hidden and shows a Windows
 #  notification with the result when it is done.
 #  Skipped: apps pinned with 'winget pin add <id>', Microsoft Store apps (the Store
 #  updates those itself).
@@ -332,6 +332,62 @@ function Open-Apps($items) {
 # =====================================================================
 #  UPDATE
 # =====================================================================
+# Waits until $IsDone returns true. In the window it shows a spinner and the time taken
+# on the progress bar, e.g. 'Downloading / installing  /  1:23'
+function Wait-WithSpinner([scriptblock]$IsDone) {
+    $frames = '|', '/', '-', '\'
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $n = 0
+    while (-not (& $IsDone)) {
+        if (-not $RunMode -and $script:Bar) {
+            $b = $script:Bar.Clone()
+            $b.CurrentOperation = 'Downloading / installing  {0}  {1}:{2:00}' -f $frames[$n % 4],
+                [int][Math]::Floor($sw.Elapsed.TotalMinutes), $sw.Elapsed.Seconds
+            Write-Progress @b
+        }
+        $n++
+        Start-Sleep -Milliseconds 250
+    }
+}
+
+# Runs Update-WinGetPackage in the background so the spinner can move meanwhile.
+# Always returns @{ Status; Reboot; Code; Error } and never throws.
+$UpdateWork = {
+    param($p)
+    $ProgressPreference = 'SilentlyContinue'   # winget's bar shows full during install: hide it
+    try {
+        Import-Module Microsoft.WinGet.Client -ErrorAction Stop
+        $r = Update-WinGetPackage @p -ErrorAction Stop
+        @{ Status = "$($r.Status)"; Reboot = [bool]$r.RebootRequired; Code = "$($r.InstallerErrorCode)"; Error = '' }
+    } catch {
+        @{ Status = 'Error'; Reboot = $false; Code = ''; Error = $_.Exception.Message }
+    }
+}
+function Invoke-WinGetUpdate($params) {
+    $ps = $null; $handle = $null
+    try {
+        $iss = [Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
+        try { $iss.ExecutionPolicy = [Microsoft.PowerShell.ExecutionPolicy]::Bypass } catch {}
+        $ps = [PowerShell]::Create($iss)
+        [void]$ps.AddScript($UpdateWork.ToString()).AddArgument($params)
+        $handle = $ps.BeginInvoke()
+        Wait-WithSpinner ({ $handle.IsCompleted }.GetNewClosure())
+        $out = $ps.EndInvoke($handle)
+        if ($out.Count) {
+            $o = $out[$out.Count - 1].BaseObject
+            if ($o -is [hashtable]) { return $o }
+        }
+        $msg = if ($ps.Streams.Error.Count) { "$($ps.Streams.Error[0])" } else { 'no result from winget' }
+        return @{ Status = 'Error'; Reboot = $false; Code = ''; Error = $msg }
+    } catch {
+        return @{ Status = 'Error'; Reboot = $false; Code = ''; Error = $_.Exception.Message }
+    } finally {
+        # If stopped with Ctrl+C mid-install, let the installer finish instead of cutting it off
+        if ($ps -and (-not $handle -or $handle.IsCompleted)) { $ps.Dispose() }
+        Show-Bar
+    }
+}
+
 # Returns 'ok', 'failed' or 'skipped'
 function Update-OnePackage($pkg, $protect) {
     $to = @($pkg.AvailableVersions)[0]
@@ -353,21 +409,23 @@ function Update-OnePackage($pkg, $protect) {
             if ($try -lt 3) {
                 $params = @{ Id = $pkg.Id; Source = $pkg.Source; MatchOption = 'Equals'; Mode = 'Silent' }
                 if ($try -eq 2) { $params.Force = $true }
-                try {
-                    # winget's own bar shows full while the installer runs (it cannot see the
-                    # installer's progress), which looks like it is done: hide it
-                    $r = & { $ProgressPreference = 'SilentlyContinue'; Update-WinGetPackage @params -ErrorAction Stop }
-                    $status = "$($r.Status)"; $reboot = [bool]$r.RebootRequired
-                    $detail = "installer code $($r.InstallerErrorCode)"
-                } catch { $status = 'Error'; $detail = $_.Exception.Message }
+                $r = Invoke-WinGetUpdate $params
+                $status = "$($r.Status)"; $reboot = [bool]$r.Reboot
+                $detail = if ($r.Error) { $r.Error } else { "installer code $($r.Code)" }
             } else {
                 # Last try: winget.exe itself, in case the module is the problem
-                & winget.exe upgrade --id $pkg.Id --exact --source $pkg.Source --silent --force `
-                    --accept-package-agreements --accept-source-agreements --disable-interactivity *> $null
-                $code = $LASTEXITCODE
-                Show-Bar
+                $code = $null
+                try {
+                    $proc = Start-Process -FilePath 'winget.exe' -WindowStyle Hidden -PassThru -ArgumentList @(
+                        'upgrade', '--id', $pkg.Id, '--exact', '--source', $pkg.Source, '--silent', '--force',
+                        '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity')
+                    $null = $proc.Handle      # keeps the exit code readable after it ends
+                    Wait-WithSpinner ({ $proc.HasExited }.GetNewClosure())
+                    $proc.WaitForExit()
+                    $code = $proc.ExitCode
+                } catch { $detail = $_.Exception.Message }
                 $status = if ($code -eq 0) { 'Ok' } else { 'Error' }
-                $detail = 'winget exit code 0x{0:X8}' -f $code
+                if ($null -ne $code) { $detail = 'winget exit code 0x{0:X8}' -f $code }
             }
 
             if ($status -eq 'Ok') {
@@ -447,7 +505,6 @@ function Invoke-Update {
         foreach ($p in $pkgs) {
             $i++
             $script:Bar = @{ Id = 1; Activity = "Updating apps ($i of $($pkgs.Count))"; Status = "$($p.Name)"
-                             CurrentOperation = 'Downloading and installing, can take a few minutes'
                              PercentComplete = [int](($i - 1) * 100 / $pkgs.Count) }
             Show-Bar
             if (Test-Pinned $p.Id $pins) { Log "$($p.Name): pinned, skipped" 'DarkGray'; $n.skipped++; continue }
