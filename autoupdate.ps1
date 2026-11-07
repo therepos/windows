@@ -6,10 +6,15 @@
 #                      PC is on again if it was off or asleep then)
 #   2 = Update now     same update, in this window
 #   3 = Open log       %LOCALAPPDATA%\autoupdate\update.log
+#   4 = Settings       the 'autoupdate' shortcut: type autoupdate in any new PowerShell
+#                      window to run the local copy in %LOCALAPPDATA%\autoupdate
 #   0 = Quit           closes this window
 #  An app that is open is closed first (gracefully, forced after 20 s), updated, then
-#  reopened. A failed update is retried twice (second retry with winget.exe --force).
-#  'Update now' shows a progress bar; the weekly task runs hidden and shows a Windows
+#  reopened minimized if it was minimized or in the tray. A failed update is retried twice (second retry with winget.exe --force);
+#  retries also close other apps that have its files open (e.g. a browser using the OBS
+#  virtual camera) and reopen them after.
+#  'Update now' shows a progress bar (apps done of total, plus a spinner and the time
+#  taken for the current app). The weekly task runs hidden and shows a Windows
 #  notification with the result when it is done.
 #  Skipped: apps pinned with 'winget pin add <id>', Microsoft Store apps (the Store
 #  updates those itself).
@@ -31,14 +36,19 @@ $RunMode   = ($args -contains '-Run')      # set by the scheduled task
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-# --- Self-elevate: re-run the same one-liner in an elevated window ------------
+# --- Self-elevate: re-run the same one-liner (or the local copy, when started from the
+#     'autoupdate' shortcut) in an elevated window ----------------------------------
 $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
            ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $IsAdmin -and -not $RunMode) {
     Write-Host "  Requesting administrator rights..." -ForegroundColor Yellow
-    $cmd = "[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; try { irm '${ScriptUrl}?$(Get-Random)' | iex } catch { Write-Host `$_ -ForegroundColor Red; Read-Host 'Press Enter to exit' }"
-    Start-Process -FilePath 'powershell.exe' -Verb RunAs `
-        -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $cmd
+    if ($PSCommandPath) {
+        $elevArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
+    } else {
+        $cmd = "[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; try { irm '${ScriptUrl}?$(Get-Random)' | iex } catch { Write-Host `$_ -ForegroundColor Red; Read-Host 'Press Enter to exit' }"
+        $elevArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $cmd)
+    }
+    Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $elevArgs
     Write-Host "  Continue in the new (elevated) window. You can close this one." -ForegroundColor Gray
     return
 }
@@ -165,22 +175,26 @@ function Get-AppDirs($pkg) {
             }
         }
     }
-    $portable = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
-    Get-ChildItem -LiteralPath $portable -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name.StartsWith("$($pkg.Id)_", 'OrdinalIgnoreCase') } |
-        ForEach-Object { if (-not $dirs.Contains($_.FullName)) { $dirs.Add($_.FullName) } }
+    # Zip-based apps (e.g. adb.exe from Platform-Tools): per-user and machine-wide folders
+    foreach ($portable in @((Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'),
+                            "$env:ProgramFiles\WinGet\Packages", "${env:ProgramFiles(x86)}\WinGet\Packages")) {
+        Get-ChildItem -LiteralPath $portable -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name.StartsWith("$($pkg.Id)_", 'OrdinalIgnoreCase') } |
+            ForEach-Object { if (-not $dirs.Contains($_.FullName)) { $dirs.Add($_.FullName) } }
+    }
     , $dirs.ToArray()
 }
 
 # Running processes of a package: exe inside one of its folders, or named like the last
-# part of its id (qBittorrent.qBittorrent -> qbittorrent.exe). Nothing from C:\Windows.
+# part of its id (qBittorrent.qBittorrent -> qbittorrent.exe). Nothing from C:\Windows, and
+# no Windows services (session 0): their installers stop and restart those themselves.
 function Get-AppProcesses($pkg, $dirs) {
     $short  = ("$($pkg.Id)" -split '\.')[-1]
     $winDir = $env:windir.TrimEnd('\') + '\'
     @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
         $path = $null
         try { $path = $_.Path } catch {}
-        if (-not $path -or $_.Id -eq $PID) { return $false }
+        if (-not $path -or $_.Id -eq $PID -or $_.SessionId -eq 0) { return $false }
         if ($path.StartsWith($winDir, 'OrdinalIgnoreCase')) { return $false }
         foreach ($d in $dirs) { if ($path.StartsWith($d + '\', 'OrdinalIgnoreCase')) { return $true } }
         return ($_.ProcessName -ieq $short)
@@ -205,20 +219,26 @@ function Test-Running($p) {
     try { return (-not $p.HasExited) } catch { return ($null -ne (Get-Process -Id $p.Id -ErrorAction SilentlyContinue)) }
 }
 
-# Closes the processes (like clicking X, then forced after 20 s). Returns the exe paths to
-# reopen afterwards: only each app's top process, not the helpers it started itself.
+# Closes the processes (like clicking X, then forced after 20 s). Returns what to reopen
+# afterwards (exe path and window state): only each app's top process, not its helpers.
 function Close-AppProcesses($procs) {
     $ids = @($procs | ForEach-Object { $_.Id })
     $reopen = @()
     foreach ($p in $procs) {
         $parent = (Get-CimInstance Win32_Process -Filter "ProcessId=$($p.Id)" -ErrorAction SilentlyContinue).ParentProcessId
         $path = $null; try { $path = $p.Path } catch {}
-        if ($path -and $ids -notcontains [int]$parent -and $reopen -notcontains $path) { $reopen += $path }
+        if (-not $path -or $ids -contains [int]$parent -or @($reopen | Where-Object { $_.Path -eq $path }).Count) { continue }
+        # Reopen only what you started (from Start, desktop or startup: parent is explorer) or
+        # what had a window. Background helpers are restarted by their own app or service.
+        $state  = Get-WindowState $p
+        $byUser = (Get-Process -Id $parent -ErrorAction SilentlyContinue).ProcessName -eq 'explorer'
+        if ($byUser -or $state -ne 'hidden') { $reopen += [pscustomobject]@{ Path = $path; State = $state } }
     }
     foreach ($p in $procs) {
         Log "  Closing $($p.ProcessName) (PID $($p.Id))" 'DarkGray'
         & taskkill.exe /PID $p.Id *> $null
     }
+    Show-Bar
     $deadline = (Get-Date).AddSeconds(20)
     while ((Get-Date) -lt $deadline -and @($procs | Where-Object { Test-Running $_ }).Count) { Start-Sleep -Milliseconds 500 }
     foreach ($p in $procs) {
@@ -231,19 +251,154 @@ function Close-AppProcesses($procs) {
     , $reopen
 }
 
-# explorer.exe starts the app as the normal user, not as admin like this script
-function Open-Apps($paths) {
-    foreach ($path in @($paths | Select-Object -Unique)) {
-        if ($path -and (Test-Path -LiteralPath $path)) {
-            Log "  Reopening $(Split-Path -Path $path -Leaf)" 'DarkGray'
-            Start-Process -FilePath (Join-Path $env:windir 'explorer.exe') -ArgumentList "`"$path`""
+# Other apps that have this app's files open, e.g. browsers and video-call apps using the
+# OBS virtual camera (OBS installer code 6). Only done on a retry, since it can close a browser.
+$ExtraDirs = @{ 'OBSProject.OBSStudio' = @("$env:ProgramData\obs-studio-hook") }
+$StoppableServices = @('FrameServer', 'FrameServerMonitor')   # Windows camera service, restarts by itself
+
+function Close-FileUsers($pkg, $dirs, $protect) {
+    $dirs = @(@($dirs) + @($ExtraDirs["$($pkg.Id)"]) | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
+    if (-not $dirs.Count) { return , @() }
+    $winDir = $env:windir.TrimEnd('\') + '\'
+    $users = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        if ($_.Id -le 4 -or $protect -contains $_.Id) { return $false }
+        $mods = $null; try { $mods = $_.Modules } catch {}
+        foreach ($m in $mods) {
+            $f = "$($m.FileName)"
+            foreach ($d in $dirs) { if ($f.StartsWith($d + '\', 'OrdinalIgnoreCase')) { return $true } }
         }
+        return $false
+    })
+    if (-not $users.Count) { return , @() }
+    $apps = @(); $services = @()
+    foreach ($u in $users) {
+        $path = $null; try { $path = $u.Path } catch {}
+        if ($path -and $u.SessionId -ne 0 -and -not $path.StartsWith($winDir, 'OrdinalIgnoreCase')) {
+            if ($apps -notcontains $path) { $apps += $path }
+        } else {
+            $svc  = @(Get-CimInstance Win32_Service -Filter "ProcessId=$($u.Id)" -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+            $stop = @($svc | Where-Object { $StoppableServices -contains $_ })
+            if ($stop.Count) { $services += $stop }
+            else { Log "  $($u.ProcessName) (PID $($u.Id)) uses its files but is a Windows service, left open" 'Yellow' }
+        }
+    }
+    foreach ($s in @($services | Select-Object -Unique)) {
+        Log "  Stopping Windows service $s (uses its files)" 'DarkGray'
+        Stop-Service -Name $s -Force -ErrorAction SilentlyContinue
+    }
+    if (-not $apps.Count) { return , @() }
+    # Close the whole app (every process of that exe), not only the one holding the file
+    $procs = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        $pp = $null; try { $pp = $_.Path } catch {}
+        $pp -and ($apps -contains $pp) -and $_.SessionId -ne 0 -and ($protect -notcontains $_.Id) })
+    if (-not $procs.Count) { return , @() }
+    Log "  Other apps using its files: $((@($procs | ForEach-Object { $_.ProcessName }) | Select-Object -Unique) -join ', ')" 'Yellow'
+    Close-AppProcesses $procs
+}
+
+# Window state before closing: 'normal', 'minimized', or 'hidden' (no visible window,
+# e.g. in the system tray)
+if (-not ('AutoUpdate.Win' -as [type])) {
+    Add-Type -Namespace AutoUpdate -Name Win -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
+[DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+'@
+}
+function Get-WindowState($p) {
+    $h = [IntPtr]::Zero
+    try { $p.Refresh(); $h = $p.MainWindowHandle } catch {}
+    if ($h -eq [IntPtr]::Zero) { return 'hidden' }
+    if ([AutoUpdate.Win]::IsIconic($h)) { return 'minimized' }
+    'normal'
+}
+
+# Waits up to 15 s for the reopened app's window, then minimizes it like clicking its
+# minimize button, so apps set to 'minimize to tray' go back to the tray
+function Restore-WindowState([string]$path) {
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Milliseconds 500
+        $w = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+            $pp = $null; try { $pp = $_.Path } catch {}
+            $pp -eq $path -and $_.MainWindowHandle -ne [IntPtr]::Zero } | Select-Object -First 1
+        if ($w) {
+            [void][AutoUpdate.Win]::PostMessage($w.MainWindowHandle, 0x0112, [IntPtr]0xF020, [IntPtr]::Zero)  # WM_SYSCOMMAND, SC_MINIMIZE
+            return
+        }
+    }
+}
+
+# explorer.exe starts the app as the normal user, not as admin like this script
+function Open-Apps($items) {
+    $seen = @()
+    foreach ($it in @($items)) {
+        if (-not $it -or -not $it.Path -or $seen -contains $it.Path) { continue }
+        $seen += $it.Path
+        if (-not (Test-Path -LiteralPath $it.Path)) { continue }
+        Log "  Reopening $(Split-Path -Path $it.Path -Leaf)$(if ($it.State -ne 'normal') { " ($($it.State))" })" 'DarkGray'
+        Start-Process -FilePath (Join-Path $env:windir 'explorer.exe') -ArgumentList "`"$($it.Path)`""
+        if ($it.State -ne 'normal') { Restore-WindowState $it.Path }
     }
 }
 
 # =====================================================================
 #  UPDATE
 # =====================================================================
+# Waits until $IsDone returns true. In the window it shows a spinner and the time taken
+# on the progress bar, e.g. 'Downloading / installing  /  1:23'
+function Wait-WithSpinner([scriptblock]$IsDone) {
+    $frames = '|', '/', '-', '\'
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $n = 0
+    while (-not (& $IsDone)) {
+        if (-not $RunMode -and $script:Bar) {
+            $b = $script:Bar.Clone()
+            $b.CurrentOperation = 'Downloading / installing  {0}  {1}:{2:00}' -f $frames[$n % 4],
+                [int][Math]::Floor($sw.Elapsed.TotalMinutes), $sw.Elapsed.Seconds
+            Write-Progress @b
+        }
+        $n++
+        Start-Sleep -Milliseconds 250
+    }
+}
+
+# Runs Update-WinGetPackage in the background so the spinner can move meanwhile.
+# Always returns @{ Status; Reboot; Code; Error } and never throws.
+$UpdateWork = {
+    param($p)
+    $ProgressPreference = 'SilentlyContinue'   # winget's bar shows full during install: hide it
+    try {
+        Import-Module Microsoft.WinGet.Client -ErrorAction Stop
+        $r = Update-WinGetPackage @p -ErrorAction Stop
+        @{ Status = "$($r.Status)"; Reboot = [bool]$r.RebootRequired; Code = "$($r.InstallerErrorCode)"; Error = '' }
+    } catch {
+        @{ Status = 'Error'; Reboot = $false; Code = ''; Error = $_.Exception.Message }
+    }
+}
+function Invoke-WinGetUpdate($params) {
+    $ps = $null; $handle = $null
+    try {
+        $iss = [Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
+        try { $iss.ExecutionPolicy = [Microsoft.PowerShell.ExecutionPolicy]::Bypass } catch {}
+        $ps = [PowerShell]::Create($iss)
+        [void]$ps.AddScript($UpdateWork.ToString()).AddArgument($params)
+        $handle = $ps.BeginInvoke()
+        Wait-WithSpinner ({ $handle.IsCompleted }.GetNewClosure())
+        $out = $ps.EndInvoke($handle)
+        if ($out.Count) {
+            $o = $out[$out.Count - 1].BaseObject
+            if ($o -is [hashtable]) { return $o }
+        }
+        $msg = if ($ps.Streams.Error.Count) { "$($ps.Streams.Error[0])" } else { 'no result from winget' }
+        return @{ Status = 'Error'; Reboot = $false; Code = ''; Error = $msg }
+    } catch {
+        return @{ Status = 'Error'; Reboot = $false; Code = ''; Error = $_.Exception.Message }
+    } finally {
+        # If stopped with Ctrl+C mid-install, let the installer finish instead of cutting it off
+        if ($ps -and (-not $handle -or $handle.IsCompleted)) { $ps.Dispose() }
+        Show-Bar
+    }
+}
+
 # Returns 'ok', 'failed' or 'skipped'
 function Update-OnePackage($pkg, $protect) {
     $to = @($pkg.AvailableVersions)[0]
@@ -259,23 +414,29 @@ function Update-OnePackage($pkg, $protect) {
                 return 'skipped'
             }
             if ($procs.Count) { $reopen += Close-AppProcesses $procs }
+            if ($try -ge 2) { $reopen += Close-FileUsers $pkg $dirs $protect }
 
             $status = ''; $detail = ''; $reboot = $false
             if ($try -lt 3) {
                 $params = @{ Id = $pkg.Id; Source = $pkg.Source; MatchOption = 'Equals'; Mode = 'Silent' }
                 if ($try -eq 2) { $params.Force = $true }
-                try {
-                    $r = Update-WinGetPackage @params -ErrorAction Stop
-                    $status = "$($r.Status)"; $reboot = [bool]$r.RebootRequired
-                    $detail = "installer code $($r.InstallerErrorCode)"
-                } catch { $status = 'Error'; $detail = $_.Exception.Message }
+                $r = Invoke-WinGetUpdate $params
+                $status = "$($r.Status)"; $reboot = [bool]$r.Reboot
+                $detail = if ($r.Error) { $r.Error } else { "installer code $($r.Code)" }
             } else {
                 # Last try: winget.exe itself, in case the module is the problem
-                & winget.exe upgrade --id $pkg.Id --exact --source $pkg.Source --silent --force `
-                    --accept-package-agreements --accept-source-agreements --disable-interactivity *> $null
-                $code = $LASTEXITCODE
+                $code = $null
+                try {
+                    $proc = Start-Process -FilePath 'winget.exe' -WindowStyle Hidden -PassThru -ArgumentList @(
+                        'upgrade', '--id', $pkg.Id, '--exact', '--source', $pkg.Source, '--silent', '--force',
+                        '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity')
+                    $null = $proc.Handle      # keeps the exit code readable after it ends
+                    Wait-WithSpinner ({ $proc.HasExited }.GetNewClosure())
+                    $proc.WaitForExit()
+                    $code = $proc.ExitCode
+                } catch { $detail = $_.Exception.Message }
                 $status = if ($code -eq 0) { 'Ok' } else { 'Error' }
-                $detail = 'winget exit code 0x{0:X8}' -f $code
+                if ($null -ne $code) { $detail = 'winget exit code 0x{0:X8}' -f $code }
             }
 
             if ($status -eq 'Ok') {
@@ -287,6 +448,13 @@ function Update-OnePackage($pkg, $protect) {
                     if ($reboot) { $script:RebootNeeded = $true }
                     return 'ok'
                 }
+            }
+            # winget lists it as installed but cannot find it to update (a winget bug, seen with
+            # zip-based apps like FFmpeg): retrying does not help, a one-time reinstall does
+            if ($detail -match 'No (installed )?packages? (matched|found)' -or $detail -match '8A150014') {
+                Log "  Skipped: winget cannot find the installed copy to update. Fix once in PowerShell:" 'Yellow'
+                Log "    winget uninstall --id $($pkg.Id) --exact; winget install --id $($pkg.Id) --exact" 'Yellow'
+                return 'skipped'
             }
             if ($status -eq 'NoApplicableUpgrade') {
                 Log '  Skipped: winget has no update that fits this install.' 'Yellow'
@@ -302,6 +470,11 @@ function Update-OnePackage($pkg, $protect) {
         if ($reopen.Count) { Open-Apps $reopen }
     }
 }
+
+# The console hides the progress bar while a program like taskkill.exe or winget.exe runs,
+# and only shows it again on the next Write-Progress: call this after running one
+$script:Bar = $null
+function Show-Bar { if ($script:Bar) { Write-Progress @script:Bar } }
 
 function Save-Last([string]$text) {
     try { Set-Content -LiteralPath $LastFile -Value ("{0}, {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $text) } catch {}
@@ -344,17 +517,19 @@ function Invoke-Update {
         $pkgs = @(Get-WinGetPackage -ErrorAction Stop | Where-Object {
             $_.IsUpdateAvailable -and $_.Source -eq 'winget' -and $_.Id -ne 'Microsoft.AppInstaller' })
         $n = @{ ok = 0; failed = 0; skipped = 0 }
-        # Progress bar in the window ('Update now'); winget's own download bar shows under it
+        # Progress bar in the window ('Update now'): apps done out of the total
         if (-not $RunMode) { $ProgressPreference = 'Continue' }
         $i = 0
         foreach ($p in $pkgs) {
             $i++
-            Write-Progress -Id 1 -Activity "Updating apps ($i of $($pkgs.Count))" -Status "$($p.Name)" `
-                -PercentComplete ([int](($i - 1) * 100 / $pkgs.Count))
+            $script:Bar = @{ Id = 1; Activity = "Updating apps ($i of $($pkgs.Count))"; Status = "$($p.Name)"
+                             PercentComplete = [int](($i - 1) * 100 / $pkgs.Count) }
+            Show-Bar
             if (Test-Pinned $p.Id $pins) { Log "$($p.Name): pinned, skipped" 'DarkGray'; $n.skipped++; continue }
             $n[(Update-OnePackage $p $protect)]++
         }
         Write-Progress -Id 1 -Activity 'Updating apps' -Completed
+        $script:Bar = $null
         $summary = if ($pkgs.Count) { "$($n.ok) updated, $($n.failed) failed, $($n.skipped) skipped" } else { 'all up to date' }
         if ($script:RebootNeeded) { $summary += ', restart needed' }
         Log "==== Done: $summary ====" $(if ($n.failed) { 'Red' } else { 'Green' })
@@ -404,6 +579,66 @@ function Disable-WeeklyTask {
 }
 
 # =====================================================================
+#  SHORTCUT
+# =====================================================================
+# Optional one-word shortcut: typing `autoupdate` in any new PowerShell window runs the local
+# copy in %LOCALAPPDATA%\autoupdate (the same copy the weekly task runs; nothing is fetched)
+$ShortcutLine = 'function autoupdate { & "$env:LOCALAPPDATA\autoupdate\autoupdate.ps1" }'
+
+function Test-Shortcut {
+    (Test-Path -LiteralPath $PROFILE) -and (Test-Path -LiteralPath $LocalCopy) -and
+        (@(Get-Content -LiteralPath $PROFILE -ErrorAction SilentlyContinue) -contains $ShortcutLine)
+}
+
+function Switch-Shortcut {
+    try {
+        $on = Test-Shortcut
+        if (Test-Path -LiteralPath $PROFILE) {
+            @(Get-Content -LiteralPath $PROFILE) | Where-Object { $_ -notmatch '^function autoupdate ' } | Set-Content -LiteralPath $PROFILE
+        }
+        if ($on) {
+            # The weekly task still needs the local copy
+            if ((Get-TaskState) -eq 'off') { Remove-Item -LiteralPath $LocalCopy -Force -ErrorAction SilentlyContinue }
+            Say "  Shortcut removed." 'Green'
+            return
+        }
+        New-Item -ItemType Directory -Path $ToolDir -Force | Out-Null
+        if ($PSCommandPath -and (Test-Path -LiteralPath $PSCommandPath)) {
+            if ($PSCommandPath -ne $LocalCopy) { Copy-Item -LiteralPath $PSCommandPath -Destination $LocalCopy -Force }
+        } else {
+            Invoke-WebRequest -Uri "${ScriptUrl}?$(Get-Random)" -OutFile $LocalCopy -UseBasicParsing
+        }
+        Unblock-File -LiteralPath $LocalCopy -ErrorAction SilentlyContinue
+        if ((Get-ExecutionPolicy -Scope CurrentUser) -in 'Undefined', 'Restricted', 'AllSigned') {
+            Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
+        }
+        if (-not (Test-Path -LiteralPath $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
+        Add-Content -LiteralPath $PROFILE "`n$ShortcutLine"
+        Say "  Shortcut added. In a new PowerShell window, just type: autoupdate" 'Green'
+    } catch {
+        Say "  Could not change the shortcut: $($_.Exception.Message)" 'Red'
+    }
+}
+
+function Show-Settings {
+    while ($true) {
+        $short = if (Test-Shortcut) { 'on' } else { 'off' }
+        Say ""
+        Say "  ---------------- SETTINGS -------------------" 'Cyan'
+        Say ""
+        Say "    1  -  Shortcut 'autoupdate'   [$short]" 'White'
+        Say "    2  -  Back" 'White'
+        Say "    0  -  Quit" 'White'
+        Say ""
+        switch (Read-MenuKey 'Choose 0-2' '012') {
+            '1' { Switch-Shortcut }
+            '2' { return 'back' }
+            '0' { return 'quit' }
+        }
+    }
+}
+
+# =====================================================================
 #  MAIN
 # =====================================================================
 if ($RunMode) {
@@ -424,10 +659,16 @@ while ($true) {
     Say "    1  -  Weekly update   [$(Get-TaskState)]" 'White'
     Say "    2  -  Update now" 'White'
     Say "    3  -  Open log        [last: $lastRun]" 'White'
+    Say "    4  -  Settings" 'White'
     Say "    0  -  Quit" 'White'
     Say ""
-    $choice = Read-MenuKey 'Choose 0-3' '0123' $last
+    $choice = Read-MenuKey 'Choose 0-4' '01234' $last
     if ($choice -eq '0') { break }
+    if ($choice -eq '4') {
+        if (@(Show-Settings) -contains 'quit') { break }
+        Clear-Host
+        continue
+    }
     Say ""
     try {
         switch ($choice) {
