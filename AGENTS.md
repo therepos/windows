@@ -14,7 +14,7 @@ One-click Windows scripts for a non-technical user. Scripts are run straight fro
 
 ## Script format
 
-- Prefer `.ps1` run as `irm https://github.com/therepos/windows/raw/main/apps/<name>.ps1 | iex`:
+- Prefer `.ps1` run as `irm "https://github.com/therepos/windows/raw/main/apps/<name>.ps1?$(Get-Random)" | iex`:
   nothing to download, no SmartScreen warning, no Python needed. Do not keep a `.bat`
   copy of the same script.
 - Header (see Documentation): line 1 the bootstrap, line 2 `# Purpose:`, then a fence.
@@ -59,7 +59,8 @@ One-click Windows scripts for a non-technical user. Scripts are run straight fro
 
 - Header by type, each followed by a fence and optional sections (`# Usage:`, `# Output:`, `# Note:`)
   closed by a fence:
-  - `.ps1`: line 1 the bootstrap `# irm https://github.com/therepos/windows/raw/main/apps/<name>.ps1 | iex`
+  - `.ps1`: line 1 the bootstrap `# irm "https://github.com/therepos/windows/raw/main/apps/<name>.ps1?$(Get-Random)" | iex`
+    (`?$(Get-Random)` so a copy-pasted bootstrap gets the latest version right after a merge, past GitHub's cache)
     (or `# pwsh -File .\<name>.ps1` for scripts run locally), line 2 `# Purpose:`
   - `.bat` / `.cmd`: line 1 `@echo off`, line 2 `:: Purpose:`, `::` fences; CRLF line endings
   - `.py`: line 1 `#!/usr/bin/env python3`, line 2 `# Purpose:`

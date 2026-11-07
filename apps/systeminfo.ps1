@@ -1,4 +1,4 @@
-# irm https://github.com/therepos/windows/raw/main/apps/systeminfo.ps1 | iex
+# irm "https://github.com/therepos/windows/raw/main/apps/systeminfo.ps1?$(Get-Random)" | iex
 # Purpose: Collect raw hardware/software info from a Windows laptop and/or Android phone
 # =============================================================================
 # Usage:

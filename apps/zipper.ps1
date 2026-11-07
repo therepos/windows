@@ -1,4 +1,4 @@
-# irm https://github.com/therepos/windows/raw/main/apps/zipper.ps1 | iex
+# irm "https://github.com/therepos/windows/raw/main/apps/zipper.ps1?$(Get-Random)" | iex
 # Purpose: Zip files into a password-protected 7z (auto-split over 500 MB) or unzip one, split sets included
 # =============================================================================
 # Usage:

@@ -1,4 +1,4 @@
-# irm https://github.com/therepos/windows/raw/main/apps/hibernate.ps1 | iex
+# irm "https://github.com/therepos/windows/raw/main/apps/hibernate.ps1?$(Get-Random)" | iex
 # Purpose: Enable hibernation on Windows (powercfg /hibernate on)
 # =============================================================================
 

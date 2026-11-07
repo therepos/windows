@@ -1,11 +1,11 @@
-# irm https://github.com/therepos/windows/raw/main/apps/autoupdate.ps1 | iex
+# irm "https://github.com/therepos/windows/raw/main/apps/appupdate.ps1?$(Get-Random)" | iex
 # Purpose: Update all apps with winget every Sunday 23:45, closing open apps first and reopening them after
 # =============================================================================
 # Usage:
 #   1 = Weekly update   on/off; scheduled task Sundays 23:45, or at next start if missed
 #   2 = Update now      same update, in this window
-#   3 = Open log        %LOCALAPPDATA%\autoupdate\update.log
-#   4 = Settings        'autoupdate' shortcut (runs the local copy in %LOCALAPPDATA%\autoupdate)
+#   3 = Open log        %LOCALAPPDATA%\appupdate\update.log
+#   4 = Settings        'appupdate' shortcut (runs the local copy in %LOCALAPPDATA%\appupdate)
 #   0 = Quit
 #
 # Note:
@@ -17,12 +17,12 @@
 #   The task runs a local copy; turning the weekly update on again refreshes it
 # =============================================================================
 
-$ScriptUrl = 'https://github.com/therepos/windows/raw/main/apps/autoupdate.ps1'
-$ToolDir   = Join-Path $env:LOCALAPPDATA 'autoupdate'
-$LocalCopy = Join-Path $ToolDir 'autoupdate.ps1'
+$ScriptUrl = 'https://github.com/therepos/windows/raw/main/apps/appupdate.ps1'
+$ToolDir   = Join-Path $env:LOCALAPPDATA 'appupdate'
+$LocalCopy = Join-Path $ToolDir 'appupdate.ps1'
 $LogFile   = Join-Path $ToolDir 'update.log'
 $LastFile  = Join-Path $ToolDir 'last.txt'
-$TaskName  = 'AutoUpdate Apps'
+$TaskName  = 'AppUpdate'
 $RunDay    = 'Sunday'
 $RunAt     = '23:45'
 $RunMode   = ($args -contains '-Run')      # set by the scheduled task
@@ -31,18 +31,33 @@ $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 # --- Self-elevate: re-run the same one-liner (or the local copy, when started from the
-#     'autoupdate' shortcut) in an elevated window ----------------------------------
+#     'appupdate' shortcut) in an elevated window ----------------------------------
 $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
            ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $IsAdmin -and -not $RunMode) {
     Write-Host "  Requesting administrator rights..." -ForegroundColor Yellow
-    if ($PSCommandPath) {
-        $elevArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
-    } else {
-        $cmd = "[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; try { irm '${ScriptUrl}?$(Get-Random)' | iex } catch { Write-Host `$_ -ForegroundColor Red; Read-Host 'Press Enter to exit' }"
-        $elevArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $cmd)
+    $run = if ($PSCommandPath) { "& '$($PSCommandPath -replace "'", "''")'" } else { "irm '${ScriptUrl}?$(Get-Random)' | iex" }
+    $cmd = "[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; try { $run } catch { Write-Host `$_ -ForegroundColor Red; Read-Host 'Press Enter to exit' }"
+    # Encoded, so Windows Terminal does not split the command at ';' or mangle quotes
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+    $psArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $enc)
+    # Windows Terminal when installed (Windows ignores the default-terminal setting for admin windows)
+    $opened = $false
+    if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
+        try {
+            Start-Process -FilePath 'wt.exe' -Verb RunAs -ArgumentList (@('powershell.exe') + $psArgs) -ErrorAction Stop
+            $opened = $true
+        } catch {
+            # 'No' on the admin prompt: do not ask again for the classic window
+            $e = $_.Exception
+            while ($e.InnerException) { $e = $e.InnerException }
+            if ($e -is [ComponentModel.Win32Exception] -and $e.NativeErrorCode -eq 1223) {
+                Write-Host "  Cancelled." -ForegroundColor Yellow
+                return
+            }
+        }
     }
-    Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $elevArgs
+    if (-not $opened) { Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $psArgs }
     Write-Host "  Continue in the new (elevated) window. You can close this one." -ForegroundColor Gray
     return
 }
@@ -292,8 +307,8 @@ function Close-FileUsers($pkg, $dirs, $protect) {
 
 # Window state before closing: 'normal', 'minimized', or 'hidden' (no visible window,
 # e.g. in the system tray)
-if (-not ('AutoUpdate.Win' -as [type])) {
-    Add-Type -Namespace AutoUpdate -Name Win -MemberDefinition @'
+if (-not ('AppUpdate.Win' -as [type])) {
+    Add-Type -Namespace AppUpdate -Name Win -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
 [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 '@
@@ -302,7 +317,7 @@ function Get-WindowState($p) {
     $h = [IntPtr]::Zero
     try { $p.Refresh(); $h = $p.MainWindowHandle } catch {}
     if ($h -eq [IntPtr]::Zero) { return 'hidden' }
-    if ([AutoUpdate.Win]::IsIconic($h)) { return 'minimized' }
+    if ([AppUpdate.Win]::IsIconic($h)) { return 'minimized' }
     'normal'
 }
 
@@ -315,7 +330,7 @@ function Restore-WindowState([string]$path) {
             $pp = $null; try { $pp = $_.Path } catch {}
             $pp -eq $path -and $_.MainWindowHandle -ne [IntPtr]::Zero } | Select-Object -First 1
         if ($w) {
-            [void][AutoUpdate.Win]::PostMessage($w.MainWindowHandle, 0x0112, [IntPtr]0xF020, [IntPtr]::Zero)  # WM_SYSCOMMAND, SC_MINIMIZE
+            [void][AppUpdate.Win]::PostMessage($w.MainWindowHandle, 0x0112, [IntPtr]0xF020, [IntPtr]::Zero)  # WM_SYSCOMMAND, SC_MINIMIZE
             return
         }
     }
@@ -502,7 +517,7 @@ function Show-Toast([string]$Title, [string]$Text) {
         $esc = [Security.SecurityElement]
         $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
         $xml.LoadXml("<toast><visual><binding template='ToastGeneric'><text>$($esc::Escape($Title))</text>" +
-            "<text>$($esc::Escape($Text))</text><text>Details: Auto Update, option 3 (log)</text></binding></visual></toast>")
+            "<text>$($esc::Escape($Text))</text><text>Details: App Update, option 3 (log)</text></binding></visual></toast>")
         $appId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
         [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId).Show(
             [Windows.UI.Notifications.ToastNotification]::new($xml))
@@ -511,7 +526,7 @@ function Show-Toast([string]$Title, [string]$Text) {
 
 function Invoke-Update {
     # One run at a time (weekly task and 'Update now')
-    $mutex = New-Object System.Threading.Mutex($false, 'Global\autoupdate-apps')
+    $mutex = New-Object System.Threading.Mutex($false, 'Global\appupdate')
     $got = $false
     try { $got = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $got = $true }
     if (-not $got) { Log 'An update is already running.' 'Yellow'; return }
@@ -576,7 +591,7 @@ function Enable-WeeklyTask {
     $settings  = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -AllowStartIfOnBatteries `
                     -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 3) -MultipleInstances IgnoreNew
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal `
-        -Settings $settings -Description 'Updates all apps with winget (therepos/windows autoupdate.ps1)' -Force | Out-Null
+        -Settings $settings -Description 'Updates all apps with winget (therepos/windows appupdate.ps1)' -Force | Out-Null
     $next = (Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue).NextRunTime
     Say "  Weekly update on. Next run: $(if ($next) { $next.ToString('ddd d MMM yyyy HH:mm') } else { "$RunDay $RunAt" })" 'Green'
 }
@@ -589,9 +604,9 @@ function Disable-WeeklyTask {
 # =====================================================================
 #  SHORTCUT
 # =====================================================================
-# Optional one-word shortcut: typing `autoupdate` in any new PowerShell window runs the local
-# copy in %LOCALAPPDATA%\autoupdate (the same copy the weekly task runs; nothing is fetched)
-$ShortcutLine = 'function autoupdate { & "$env:LOCALAPPDATA\autoupdate\autoupdate.ps1" }'
+# Optional one-word shortcut: typing `appupdate` in any new PowerShell window runs the local
+# copy in %LOCALAPPDATA%\appupdate (the same copy the weekly task runs; nothing is fetched)
+$ShortcutLine = 'function appupdate { & "$env:LOCALAPPDATA\appupdate\appupdate.ps1" }'
 
 function Test-Shortcut {
     (Test-Path -LiteralPath $PROFILE) -and (Test-Path -LiteralPath $LocalCopy) -and
@@ -602,7 +617,7 @@ function Switch-Shortcut {
     try {
         $on = Test-Shortcut
         if (Test-Path -LiteralPath $PROFILE) {
-            @(Get-Content -LiteralPath $PROFILE) | Where-Object { $_ -notmatch '^function autoupdate ' } | Set-Content -LiteralPath $PROFILE
+            @(Get-Content -LiteralPath $PROFILE) | Where-Object { $_ -notmatch '^function appupdate ' } | Set-Content -LiteralPath $PROFILE
         }
         if ($on) {
             # The weekly task still needs the local copy
@@ -622,7 +637,7 @@ function Switch-Shortcut {
         }
         if (-not (Test-Path -LiteralPath $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
         Add-Content -LiteralPath $PROFILE "`n$ShortcutLine"
-        Say "  Shortcut added. In a new PowerShell window, just type: autoupdate" 'Green'
+        Say "  Shortcut added. In a new PowerShell window, just type: appupdate" 'Green'
     } catch {
         Say "  Could not change the shortcut: $($_.Exception.Message)" 'Red'
     }
@@ -634,7 +649,7 @@ function Show-Settings {
         Say ""
         Say "  ---------------- SETTINGS -------------------" 'Cyan'
         Say ""
-        Say "    1  -  Shortcut 'autoupdate'   [$short]" 'White'
+        Say "    1  -  Shortcut 'appupdate'   [$short]" 'White'
         Say "    2  -  Back" 'White'
         Say "    0  -  Quit" 'White'
         Say ""
@@ -643,6 +658,38 @@ function Show-Settings {
             '2' { return 'back' }
             '0' { return 'quit' }
         }
+    }
+}
+
+# =====================================================================
+#  MOVE FROM THE OLD NAME (autoupdate): weekly task, shortcut, log
+# =====================================================================
+function Move-FromOldName {
+    try {
+        $oldDir      = Join-Path $env:LOCALAPPDATA 'autoupdate'
+        $oldTask     = Get-ScheduledTask -TaskName 'AutoUpdate Apps' -ErrorAction SilentlyContinue
+        $oldShortcut = (Test-Path -LiteralPath $PROFILE) -and
+            @(@(Get-Content -LiteralPath $PROFILE -ErrorAction SilentlyContinue) -match '^function autoupdate ').Count
+        if (-not ($oldTask -or $oldShortcut -or (Test-Path -LiteralPath $oldDir))) { return }
+        Say '  Moving from the old name (autoupdate)...' 'DarkGray'
+        New-Item -ItemType Directory -Path $ToolDir -Force | Out-Null
+        foreach ($f in 'update.log', 'last.txt') {
+            $src = Join-Path $oldDir $f
+            if ((Test-Path -LiteralPath $src) -and -not (Test-Path -LiteralPath (Join-Path $ToolDir $f))) {
+                Move-Item -LiteralPath $src -Destination $ToolDir
+            }
+        }
+        if ($oldTask) {
+            Unregister-ScheduledTask -TaskName 'AutoUpdate Apps' -Confirm:$false
+            Enable-WeeklyTask
+        }
+        if ($oldShortcut) {
+            @(Get-Content -LiteralPath $PROFILE) | Where-Object { $_ -notmatch '^function autoupdate ' } | Set-Content -LiteralPath $PROFILE
+            if (-not (Test-Shortcut)) { Switch-Shortcut }
+        }
+        Remove-Item -LiteralPath $oldDir -Recurse -Force -ErrorAction SilentlyContinue
+    } catch {
+        Say "  Could not move everything from the old name: $($_.Exception.Message)" 'Yellow'
     }
 }
 
@@ -656,12 +703,13 @@ if ($RunMode) {
 }
 
 Clear-Host
+Move-FromOldName
 $last = ''
 while ($true) {
     $lastRun = if (Test-Path -LiteralPath $LastFile) { (Get-Content -LiteralPath $LastFile -TotalCount 1) } else { 'never' }
     Say ""
     Say "  =============================================" 'Cyan'
-    Say "        AUTO UPDATE" 'Cyan'
+    Say "        APP UPDATE" 'Cyan'
     Say "  =============================================" 'Cyan'
     Say ""
     Say "    1  -  Weekly update   [$(Get-TaskState)]" 'White'
