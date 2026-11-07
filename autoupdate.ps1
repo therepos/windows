@@ -461,6 +461,13 @@ function Update-OnePackage($pkg, $protect) {
                 Log '  Skipped: winget has no update that fits this install.' 'Yellow'
                 return 'skipped'
             }
+            # Trust what is installed over what was reported: if the update is in, it worked
+            # (e.g. winget.exe 0x8A15002B 'no applicable update' after an earlier attempt installed it)
+            $now = Get-WinGetPackage -Id $pkg.Id -MatchOption Equals -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($now -and -not $now.IsUpdateAvailable -and "$($now.InstalledVersion)" -ne "$($pkg.InstalledVersion)") {
+                Log "  Updated (now $($now.InstalledVersion))" 'Green'
+                return 'ok'
+            }
             Log "  Attempt $try failed: $status, $detail" 'Yellow'
             # Often another installer (Windows Update, msiexec) was busy: wait before retrying
             if ($try -lt 3) { Start-Sleep -Seconds 60 }
