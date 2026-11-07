@@ -439,6 +439,13 @@ function Update-OnePackage($pkg, $protect) {
                     return 'ok'
                 }
             }
+            # winget lists it as installed but cannot find it to update (a winget bug, seen with
+            # zip-based apps like FFmpeg): retrying does not help, a one-time reinstall does
+            if ($detail -match 'No (installed )?packages? (matched|found)' -or $detail -match '8A150014') {
+                Log "  Skipped: winget cannot find the installed copy to update. Fix once in PowerShell:" 'Yellow'
+                Log "    winget uninstall --id $($pkg.Id) --exact; winget install --id $($pkg.Id) --exact" 'Yellow'
+                return 'skipped'
+            }
             if ($status -eq 'NoApplicableUpgrade') {
                 Log '  Skipped: winget has no update that fits this install.' 'Yellow'
                 return 'skipped'
