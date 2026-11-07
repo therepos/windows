@@ -11,7 +11,7 @@
 #  reopened minimized if it was minimized or in the tray. A failed update is retried twice (second retry with winget.exe --force);
 #  retries also close other apps that have its files open (e.g. a browser using the OBS
 #  virtual camera) and reopen them after.
-#  'Update now' shows a progress bar; the weekly task runs hidden and shows a Windows
+#  'Update now' shows a progress bar (apps done of total); the weekly task runs hidden and shows a Windows
 #  notification with the result when it is done.
 #  Skipped: apps pinned with 'winget pin add <id>', Microsoft Store apps (the Store
 #  updates those itself).
@@ -354,7 +354,9 @@ function Update-OnePackage($pkg, $protect) {
                 $params = @{ Id = $pkg.Id; Source = $pkg.Source; MatchOption = 'Equals'; Mode = 'Silent' }
                 if ($try -eq 2) { $params.Force = $true }
                 try {
-                    $r = Update-WinGetPackage @params -ErrorAction Stop
+                    # winget's own bar shows full while the installer runs (it cannot see the
+                    # installer's progress), which looks like it is done: hide it
+                    $r = & { $ProgressPreference = 'SilentlyContinue'; Update-WinGetPackage @params -ErrorAction Stop }
                     $status = "$($r.Status)"; $reboot = [bool]$r.RebootRequired
                     $detail = "installer code $($r.InstallerErrorCode)"
                 } catch { $status = 'Error'; $detail = $_.Exception.Message }
@@ -439,12 +441,13 @@ function Invoke-Update {
         $pkgs = @(Get-WinGetPackage -ErrorAction Stop | Where-Object {
             $_.IsUpdateAvailable -and $_.Source -eq 'winget' -and $_.Id -ne 'Microsoft.AppInstaller' })
         $n = @{ ok = 0; failed = 0; skipped = 0 }
-        # Progress bar in the window ('Update now'); winget's own download bar shows under it
+        # Progress bar in the window ('Update now'): apps done out of the total
         if (-not $RunMode) { $ProgressPreference = 'Continue' }
         $i = 0
         foreach ($p in $pkgs) {
             $i++
             $script:Bar = @{ Id = 1; Activity = "Updating apps ($i of $($pkgs.Count))"; Status = "$($p.Name)"
+                             CurrentOperation = 'Downloading and installing, can take a few minutes'
                              PercentComplete = [int](($i - 1) * 100 / $pkgs.Count) }
             Show-Bar
             if (Test-Pinned $p.Id $pins) { Log "$($p.Name): pinned, skipped" 'DarkGray'; $n.skipped++; continue }
