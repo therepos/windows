@@ -1,8 +1,6 @@
 ## Usage
 
-- `.ps1`: run the bootstrap on line 1 in PowerShell.
-- `.bat` / `.cmd`: download and double-click.
-- `.py`: run with Python 3.
+Visit [therepos.github.io/windows](https://therepos.github.io/windows/) for script commands and downloads.
 
 ## Structure
 
@@ -15,5 +13,6 @@ windows
 ├── apps                    # one script per tool, one-word names
 └── scripts
     ├── sync-blocks.sh      # standardise scripts (say, menukey, downloads)
-    └── lint.sh             # diagnose and repair scripts
+    ├── lint.sh             # diagnose and repair scripts
+    └── docgen-pages.py     # build github pages
 ```
