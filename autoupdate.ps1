@@ -9,6 +9,8 @@
 #   0 = Quit           closes this window
 #  An app that is open is closed first (gracefully, forced after 20 s), updated, then
 #  reopened. A failed update is retried twice (second retry with winget.exe --force).
+#  'Update now' shows a progress bar; the weekly task runs hidden and shows a Windows
+#  notification with the result when it is done.
 #  Skipped: apps pinned with 'winget pin add <id>', Microsoft Store apps (the Store
 #  updates those itself).
 #  Needs admin (asks). Installs the Microsoft.WinGet.Client module if missing.
@@ -303,6 +305,22 @@ function Update-OnePackage($pkg, $protect) {
 
 function Save-Last([string]$text) {
     try { Set-Content -LiteralPath $LastFile -Value ("{0}, {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $text) } catch {}
+    if ($RunMode) { Show-Toast 'Apps updated' $text }
+}
+
+# Windows notification (shown as from Windows PowerShell); only used by the weekly task
+function Show-Toast([string]$Title, [string]$Text) {
+    try {
+        $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+        $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
+        $esc = [Security.SecurityElement]
+        $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+        $xml.LoadXml("<toast><visual><binding template='ToastGeneric'><text>$($esc::Escape($Title))</text>" +
+            "<text>$($esc::Escape($Text))</text><text>Details: Auto Update, option 3 (log)</text></binding></visual></toast>")
+        $appId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId).Show(
+            [Windows.UI.Notifications.ToastNotification]::new($xml))
+    } catch { Log "Notification failed: $($_.Exception.Message)" 'DarkGray' }
 }
 
 function Invoke-Update {
@@ -326,10 +344,17 @@ function Invoke-Update {
         $pkgs = @(Get-WinGetPackage -ErrorAction Stop | Where-Object {
             $_.IsUpdateAvailable -and $_.Source -eq 'winget' -and $_.Id -ne 'Microsoft.AppInstaller' })
         $n = @{ ok = 0; failed = 0; skipped = 0 }
+        # Progress bar in the window ('Update now'); winget's own download bar shows under it
+        if (-not $RunMode) { $ProgressPreference = 'Continue' }
+        $i = 0
         foreach ($p in $pkgs) {
+            $i++
+            Write-Progress -Id 1 -Activity "Updating apps ($i of $($pkgs.Count))" -Status "$($p.Name)" `
+                -PercentComplete ([int](($i - 1) * 100 / $pkgs.Count))
             if (Test-Pinned $p.Id $pins) { Log "$($p.Name): pinned, skipped" 'DarkGray'; $n.skipped++; continue }
             $n[(Update-OnePackage $p $protect)]++
         }
+        Write-Progress -Id 1 -Activity 'Updating apps' -Completed
         $summary = if ($pkgs.Count) { "$($n.ok) updated, $($n.failed) failed, $($n.skipped) skipped" } else { 'all up to date' }
         if ($script:RebootNeeded) { $summary += ', restart needed' }
         Log "==== Done: $summary ====" $(if ($n.failed) { 'Red' } else { 'Green' })
