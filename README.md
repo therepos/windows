@@ -8,7 +8,7 @@ One-click Windows scripts.
 
 ## One-word shortcuts (optional)
 
-`zipper`, `filesync`, `autoupdate`: run the tool once, then Settings > Shortcut. It saves a local copy in
+`zipper`, `filesync`, `appupdate`: run the tool once, then Settings > Shortcut. It saves a local copy in
 `%LOCALAPPDATA%\<tool>` and runs that, so nothing is downloaded each time.
 
 `sysinfo`: paste once in PowerShell, then open a new window and type `sysinfo`:
@@ -20,7 +20,7 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force; if (!(Test-Path $PRO
 Remove them:
 
 ```powershell
-(Get-Content $PROFILE) | Where-Object { $_ -notmatch '^function (zipper|sysinfo|filesync|autoupdate) ' } | Set-Content $PROFILE
+(Get-Content $PROFILE) | Where-Object { $_ -notmatch '^function (zipper|sysinfo|filesync|appupdate) ' } | Set-Content $PROFILE
 ```
 
 Kept per Windows user, per PC.
