@@ -62,11 +62,12 @@ function Set-WindowRight {
         # Classic console: its own window. Windows Terminal: the hidden console window is owned
         # by the Terminal window hosting this tab (it may still be opening: wait up to 3 s)
         $h = [IntPtr]::Zero
+        # Owner first: Terminal's hidden console window still reports itself as visible
         for ($i = 0; $i -lt 15 -and $h -eq [IntPtr]::Zero; $i++) {
             $c = [WinLayout.Api]::GetConsoleWindow()
-            if ($c -ne [IntPtr]::Zero -and [WinLayout.Api]::IsWindowVisible($c)) { $h = $c; break }
             $o = if ($c -ne [IntPtr]::Zero) { [WinLayout.Api]::GetAncestor($c, 3) } else { [IntPtr]::Zero }
             if ($o -ne [IntPtr]::Zero -and $o -ne $c -and [WinLayout.Api]::IsWindowVisible($o)) { $h = $o; break }
+            if ($c -ne [IntPtr]::Zero -and $o -eq $c -and [WinLayout.Api]::IsWindowVisible($c)) { $h = $c; break }
             Start-Sleep -Milliseconds 200
         }
         if ($h -eq [IntPtr]::Zero) { return }
