@@ -1,8 +1,8 @@
 @echo off
-:: Purpose: Find files whose names contain keywords under a folder (settings at #POWERSHELL_START)
+:: Purpose: Find files whose names contain keywords under a folder, with optional SharePoint links
 :: ============================================================================
 :: Note:
-::   Double-click to run; edit the settings in Notepad (right-click > Edit)
+::   Double-click to run; asks for the folder and SharePoint URL. Keywords and file types: edit in Notepad
 :: ============================================================================
 
 REM -- Extract PowerShell script from this file and run it --
@@ -26,8 +26,8 @@ exit /b
 #  USER CONFIGURATION - Change these when moving environments
 # ============================================================
 
-# LOCAL FOLDER: The OneDrive-synced root folder containing client subfolders
-$ROOT = "C:\Users\LL725AE\EY\Risk IA - D. Proposals"
+# LOCAL FOLDER: the synced root folder holding the client subfolders (blank = ask when run)
+$ROOT = ""
 
 # KEYWORDS: Search for files containing any of these in the filename
 $KEYWORDS = @("proposal", "ett", "rfq", "itt", "bq")
@@ -39,22 +39,15 @@ $FILE_TYPES = @("*.pdf", "*.pptx")
 $MAX_RESULTS = 0
 
 # OUTPUT FILE: Name of the output CSV file (saved next to this script)
-# For a full path, use e.g.: "C:\Users\LL725AE\Desktop\results.csv"
+# For a full path, use e.g.: "C:\Users\<you>\Desktop\results.csv"
 $OUTPUT_FILENAME = "proposals_results.csv"
 
 # ============================================================
-#  SHAREPOINT CONFIGURATION
+#  SHAREPOINT LINKS (optional; blank = ask when run, blank again = no links)
 # ============================================================
-# How to set up:
-#   1. Open any CLIENT FOLDER in SharePoint via Edge
-#      (e.g. right-click folder in File Explorer > "View online")
-#   2. Copy the full URL from Edge. It will look like:
-#      https://sites.ey.com/sites/RiskIA/Shared%20Documents/Forms/AllItems.aspx?id=%2Fsites%2FRiskIA%2FShared%20Documents%2FGeneral%2FD%2E%20Proposals%2FAGD&viewid=...
-#   3. Split the URL into two parts:
-#      PART A - Everything BEFORE "?id=" :
-$SP_URL_BASE = "https://sites.ey.com/sites/RiskIA/Shared%20Documents/Forms/AllItems.aspx"
-#      PART B - Everything AFTER "?id=" and BEFORE the client folder name (e.g. AGD):
-$SP_FOLDER_PATH = "%2Fsites%2FRiskIA%2FShared%20Documents%2FGeneral%2FD%2E%20Proposals%2F"
+# Paste the URL of any client folder opened in SharePoint, e.g.
+#   https://<tenant>.sharepoint.com/sites/<site>/Shared%20Documents/Forms/AllItems.aspx?id=%2Fsites%2F<site>%2F...%2F<Client>&viewid=...
+$SP_FOLDER_URL = ""
 
 # ============================================================
 #  DO NOT EDIT BELOW THIS LINE
@@ -87,6 +80,7 @@ if ([System.IO.Path]::IsPathRooted($OUTPUT_FILENAME)) {
 function ConvertTo-SharePointFolderUrl {
     param([string]$LocalFolderPath)
 
+    if (-not $SP_URL_BASE) { return "" }
     $relativePath = $LocalFolderPath.Replace($ROOT, "").TrimStart("\")
     $urlPath = $relativePath -replace '\\', '%2F'
     $urlPath = $urlPath -replace ' ', '%20'
@@ -104,11 +98,20 @@ function Format-FileSize {
 # ============================================================
 # MAIN
 # ============================================================
-if (-not (Test-Path $ROOT)) {
-    Write-Host "[ERROR] Folder not found: $ROOT" -ForegroundColor Red
-    Write-Host "  Please update the ROOT variable at the top of this script." -ForegroundColor Yellow
-    Read-Host "Press Enter to exit"
-    exit
+while (-not $ROOT -or -not (Test-Path -LiteralPath $ROOT)) {
+    if ($ROOT) { Write-Host "  Folder not found: $ROOT" -ForegroundColor Red }
+    $ROOT = (Read-Host "  Folder to search (blank = quit)").Trim().Trim('"')
+    if (-not $ROOT) { exit }
+}
+
+# SharePoint links: base = URL before ?id=, folder path = id up to and including the last %2F
+if (-not $SP_FOLDER_URL) {
+    $SP_FOLDER_URL = (Read-Host "  SharePoint URL of any client folder (blank = no links)").Trim()
+}
+$SP_URL_BASE = ""; $SP_FOLDER_PATH = ""
+if ($SP_FOLDER_URL -match '^(?<base>[^?]+)\?id=(?<id>[^&]+)' -and $Matches['id'].Contains('%2F')) {
+    $SP_URL_BASE = $Matches['base']
+    $SP_FOLDER_PATH = $Matches['id'].Substring(0, $Matches['id'].LastIndexOf('%2F') + 3)
 }
 
 $modeText = if ($MAX_RESULTS -gt 0) { "TEST MODE: First $MAX_RESULTS matches only" } else { "Full scan" }
@@ -119,7 +122,7 @@ Write-Host ("=" * 65)
 Write-Host "  Scanning    : $ROOT"
 Write-Host "  Keywords    : $($KEYWORDS -join ', ')"
 Write-Host "  File types  : $($FILE_TYPES -join ', ')"
-Write-Host "  SharePoint  : $SP_URL_BASE"
+Write-Host "  SharePoint  : $(if ($SP_URL_BASE) { $SP_URL_BASE } else { 'no links' })"
 Write-Host "  Mode        : $modeText"
 Write-Host "  Output      : $OutFile"
 Write-Host ("=" * 65)
@@ -227,14 +230,14 @@ foreach ($clientDir in $clientFolders) {
 
         $line | Out-File -FilePath $OutFile -Encoding UTF8 -Append
 
-        Write-Host "  [!] NO MATCH: $clientName" -ForegroundColor Yellow
+        Write-Host "  [-] NO MATCH: $clientName" -ForegroundColor Yellow
     }
 }
 
 # Summary
 Write-Host ""
 Write-Host ("=" * 65)
-Write-Host "  DONE!" -ForegroundColor Green
+Write-Host "  DONE" -ForegroundColor Green
 Write-Host "  Client folders scanned  : $totalClients"
 Write-Host "  Matching files found    : $totalFound"
 Write-Host "  Clients with no match   : $totalMissing"
