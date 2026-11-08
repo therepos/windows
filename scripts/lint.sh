@@ -106,6 +106,8 @@ for f in "${FILES[@]}"; do
     l1="$(line "$f" 1)"
     if [[ "$l1" == '# irm '* ]]; then
         [[ "$l1" == "$(bootstrap "$f")" ]] || bad "$f" "bootstrap (line 1) is wrong (scripts/lint.sh --fix)"
+        { grep -q '^# >>> layout$' "$f" && grep -q '^Set-WindowRight$' "$f"; } \
+            || bad "$f" "needs the layout block and a top-level 'Set-WindowRight' call before the first screen"
     elif [[ "$l1" != '# pwsh -File '* ]]; then
         bad "$f" "line 1 must be the bootstrap ('# irm ... | iex' or '# pwsh -File ...')"
     fi

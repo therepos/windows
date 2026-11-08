@@ -19,7 +19,7 @@ One-click Windows scripts for a non-technical user. Scripts are run straight fro
   copy of the same script.
 - Header (see Documentation): line 1 the bootstrap, line 2 `# Purpose:`, then a fence.
 - Shared blocks: regions between `# >>> <name>` and `# <<< <name>` are copies of the blocks in
-  `scripts/sync-blocks.sh` (`say`, `menukey`, `downloads`, `elevate`). Never edit inside the markers; edit the block
+  `scripts/sync-blocks.sh` (`say`, `menukey`, `downloads`, `elevate`, `layout`). Never edit inside the markers; edit the block
   there, then run it or `scripts/lint.sh --fix`. Per-script code goes outside. Shared look and behaviour
   belongs in a block, so changing it never touches a script's features.
 - `.ps1` files are ASCII only: Windows PowerShell 5.1 misreads other characters in files without a BOM.
@@ -29,6 +29,9 @@ One-click Windows scripts for a non-technical user. Scripts are run straight fro
   (`-NoExit` for one-shot scripts whose output must stay on screen). It re-runs the bootstrap (or the
   local copy, when started from a shortcut) in an admin Windows Terminal window, because Windows ignores
   the default-terminal setting for admin windows; without Terminal it uses the classic console.
+- Window: every bootstrap script puts its window on the right half of the screen with the `layout` shared
+  block, calling `Set-WindowRight` at top level before its first screen (after the elevate check, never in
+  a hidden or scheduled run). Lint checks the call.
 - Missing tools are fetched without admin into `%LOCALAPPDATA%\<app>` (e.g. 7za.exe).
 - Never hard-code passwords or tokens. Ask once on first use and save them
   DPAPI-encrypted (`ConvertFrom-SecureString`) in `%LOCALAPPDATA%\<app>\settings.json`.
