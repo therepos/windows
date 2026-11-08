@@ -69,6 +69,7 @@ always work. Proxmox tools: `therepos/proxmox`; MCP servers: `therepos/mcp`; Cla
   is its owner (`GetAncestor(..., GA_ROOTOWNER)`).
 - `Start-Process -Verb RunAs` cannot pass `;` or nested quotes through `wt.exe`: use `-EncodedCommand`.
 - Never close Windows services (session 0) or relaunch helper processes; their own installer or app does.
+- `[Console]::ReadKey` fails in PowerShell ISE: a script meant to be pasted into ISE (filemap) keeps typed menu answers.
 
 ## Before pushing
 
