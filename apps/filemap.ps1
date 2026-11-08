@@ -2,8 +2,9 @@
 # Purpose: List every file in a folder and its subfolders, as a text list or a clickable Excel index
 # =============================================================================
 # Usage:
-#   1 = List    every file (path, size, modified), one per line -> filemap <PC> yyyyMMdd-HHmm.txt
-#   2 = Index   every file with clickable file and folder links -> filemap <PC> yyyyMMdd-HHmm.csv
+#   1 = List      every file (path, size, modified), one per line -> filemap <PC> yyyyMMdd-HHmm.txt
+#   2 = Index     every file with clickable file and folder links -> filemap <PC> yyyyMMdd-HHmm.csv
+#   3 = Settings  'filemap' shortcut (runs a local copy in %LOCALAPPDATA%\filemap)
 #   0 = Quit
 #
 # Note:
@@ -13,6 +14,8 @@
 #   Or paste it into PowerShell ISE and press F5 (not a normal PowerShell window: later lines become answers)
 #   No PowerShell: chcp 65001, then dir "C:\Folder" /s /b /a-d > "%USERPROFILE%\Downloads\filelist.txt"
 # =============================================================================
+
+$ScriptUrl = 'https://github.com/therepos/windows/raw/main/apps/filemap.ps1'
 
 $ErrorActionPreference = 'Continue'
 $ProgressPreference    = 'SilentlyContinue'
@@ -41,6 +44,90 @@ function Get-DownloadsFolder {
     return (Join-Path $env:USERPROFILE 'Downloads')
 }
 # <<< downloads
+
+# >>> menukey
+function Read-MenuKey([string]$Prompt, [string]$Valid, [string]$Default = '') {
+    Write-Host "  $Prompt$(if ($Default) { " [$Default]" }): " -NoNewline
+    while ($true) {
+        try {
+            $k = [Console]::ReadKey($true)
+            $c = if ($k.Key -eq 'Enter') { $Default } else { "$($k.KeyChar)" }
+        } catch {
+            # No keyboard (input redirected): fall back to a typed line
+            $line = [Console]::ReadLine()
+            if ($null -eq $line) { throw 'No keyboard input available' }
+            $c = $line.Trim(); if (-not $c) { $c = $Default }
+        }
+        if ($c.Length -eq 1 -and $Valid.Contains($c)) {
+            Write-Host $c
+            # Swallow an Enter typed out of habit so it does not reach the next prompt
+            Start-Sleep -Milliseconds 300
+            try { while ([Console]::KeyAvailable) { [void][Console]::ReadKey($true) } } catch {}
+            return $c
+        }
+    }
+}
+# <<< menukey
+
+# >>> shortcut
+function Get-ShortcutName { [IO.Path]::GetFileNameWithoutExtension(([uri]$ScriptUrl).AbsolutePath) }
+function Get-ShortcutCopy { $n = Get-ShortcutName; Join-Path (Join-Path $env:LOCALAPPDATA $n) "$n.ps1" }
+function Get-ShortcutLine { 'function {0} {{ & "$env:LOCALAPPDATA\{0}\{0}.ps1" }}' -f (Get-ShortcutName) }
+function Test-Shortcut {
+    (Test-Path -LiteralPath $PROFILE) -and (Test-Path -LiteralPath (Get-ShortcutCopy)) -and
+        (@(Get-Content -LiteralPath $PROFILE -ErrorAction SilentlyContinue) -contains (Get-ShortcutLine))
+}
+function Switch-Shortcut([switch]$KeepCopy) {
+    $name = Get-ShortcutName
+    $copy = Get-ShortcutCopy
+    try {
+        $on = Test-Shortcut
+        # Remove any shortcut of this name, including older ones that downloaded the script each time
+        if (Test-Path -LiteralPath $PROFILE) {
+            @(Get-Content -LiteralPath $PROFILE) | Where-Object { $_ -notmatch "^function $name " } | Set-Content -LiteralPath $PROFILE
+        }
+        if ($on) {
+            if (-not $KeepCopy) { Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue }
+            Say "  Shortcut removed." 'Green'
+            return
+        }
+        New-Item -ItemType Directory -Path (Split-Path -Path $copy -Parent) -Force | Out-Null
+        if ($PSCommandPath -and (Test-Path -LiteralPath $PSCommandPath)) {
+            if ($PSCommandPath -ne $copy) { Copy-Item -LiteralPath $PSCommandPath -Destination $copy -Force }
+        } else {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri "${ScriptUrl}?$(Get-Random)" -OutFile $copy -UseBasicParsing
+        }
+        Unblock-File -LiteralPath $copy -ErrorAction SilentlyContinue
+        if ((Get-ExecutionPolicy -Scope CurrentUser) -in 'Undefined', 'Restricted', 'AllSigned') {
+            Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
+        }
+        if (-not (Test-Path -LiteralPath $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
+        Add-Content -LiteralPath $PROFILE "`n$(Get-ShortcutLine)"
+        Say "  Shortcut added. In a new PowerShell window, just type: $name" 'Green'
+    } catch {
+        Say "  Could not change the shortcut: $($_.Exception.Message)" 'Red'
+    }
+}
+# Settings submenu for scripts whose only setting is the shortcut; returns 'back' or 'quit'
+function Show-ShortcutSettings([switch]$KeepCopy) {
+    while ($true) {
+        $short = if (Test-Shortcut) { 'on' } else { 'off' }
+        Say ""
+        Say "  ---------------- SETTINGS -------------------" 'Cyan'
+        Say ""
+        Say ("    1  -  Shortcut '{0}'   [{1}]" -f (Get-ShortcutName), $short) 'White'
+        Say "    2  -  Back" 'White'
+        Say "    0  -  Quit" 'White'
+        Say ""
+        switch (Read-MenuKey 'Choose 0-2' '012') {
+            '1' { Switch-Shortcut -KeepCopy:$KeepCopy }
+            '2' { return 'back' }
+            '0' { return 'quit' }
+        }
+    }
+}
+# <<< shortcut
 
 function Read-TargetFolder {
     $default = Get-DownloadsFolder
@@ -352,20 +439,31 @@ function Set-WindowRight {
 # <<< layout
 Set-WindowRight
 Clear-Host
-Say ""
-Say "  =============================================" 'Cyan'
-Say "        FILE MAP" 'Cyan'
-Say "  =============================================" 'Cyan'
-Say ""
-Say "    1  -  List (text)" 'White'
-Say "    2  -  Index with links (Excel)" 'White'
-Say "    0  -  Quit" 'White'
-Say ""
-do {
-    $choice = "$(Read-Host '  Choose 0-2')".Trim()
-    if ($choice -notin '0', '1', '2') { Say "  Please type 1, 2 or 0." 'Red' }
-} until ($choice -in '0', '1', '2')
-if ($choice -eq '0') { return }
+while ($true) {
+    Say ""
+    Say "  =============================================" 'Cyan'
+    Say "        FILE MAP" 'Cyan'
+    Say "  =============================================" 'Cyan'
+    Say ""
+    Say "    1  -  List (text)" 'White'
+    Say "    2  -  Index with links (Excel)" 'White'
+    Say "    3  -  Settings" 'White'
+    Say "    0  -  Quit" 'White'
+    Say ""
+    # Typed answer, not one keypress: this script may be pasted into PowerShell ISE
+    do {
+        $choice = "$(Read-Host '  Choose 0-3')".Trim()
+        if ($choice -notin '0', '1', '2', '3') { Say "  Please type 1, 2, 3 or 0." 'Red' }
+    } until ($choice -in '0', '1', '2', '3')
+    if ($choice -eq '0') { return }
+    if ($choice -ne '3') { break }
+    try {
+        if (@(Show-ShortcutSettings) -contains 'quit') { return }
+    } catch {
+        Say "  Settings need a normal PowerShell window." 'Yellow'
+    }
+    Clear-Host
+}
 
 $Target      = Read-TargetFolder
 $DisplayRoot = Get-DisplayRoot $Target

@@ -5,6 +5,7 @@
 #   1 = Windows laptop
 #   2 = Android phone
 #   3 = Both
+#   4 = Settings        'systeminfo' shortcut (runs a local copy in %LOCALAPPDATA%\systeminfo)
 #   0 = Quit
 #
 # Note:
@@ -445,21 +446,85 @@ function Set-WindowRight {
     } catch {}
 }
 # <<< layout
+# >>> shortcut
+function Get-ShortcutName { [IO.Path]::GetFileNameWithoutExtension(([uri]$ScriptUrl).AbsolutePath) }
+function Get-ShortcutCopy { $n = Get-ShortcutName; Join-Path (Join-Path $env:LOCALAPPDATA $n) "$n.ps1" }
+function Get-ShortcutLine { 'function {0} {{ & "$env:LOCALAPPDATA\{0}\{0}.ps1" }}' -f (Get-ShortcutName) }
+function Test-Shortcut {
+    (Test-Path -LiteralPath $PROFILE) -and (Test-Path -LiteralPath (Get-ShortcutCopy)) -and
+        (@(Get-Content -LiteralPath $PROFILE -ErrorAction SilentlyContinue) -contains (Get-ShortcutLine))
+}
+function Switch-Shortcut([switch]$KeepCopy) {
+    $name = Get-ShortcutName
+    $copy = Get-ShortcutCopy
+    try {
+        $on = Test-Shortcut
+        # Remove any shortcut of this name, including older ones that downloaded the script each time
+        if (Test-Path -LiteralPath $PROFILE) {
+            @(Get-Content -LiteralPath $PROFILE) | Where-Object { $_ -notmatch "^function $name " } | Set-Content -LiteralPath $PROFILE
+        }
+        if ($on) {
+            if (-not $KeepCopy) { Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue }
+            Say "  Shortcut removed." 'Green'
+            return
+        }
+        New-Item -ItemType Directory -Path (Split-Path -Path $copy -Parent) -Force | Out-Null
+        if ($PSCommandPath -and (Test-Path -LiteralPath $PSCommandPath)) {
+            if ($PSCommandPath -ne $copy) { Copy-Item -LiteralPath $PSCommandPath -Destination $copy -Force }
+        } else {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri "${ScriptUrl}?$(Get-Random)" -OutFile $copy -UseBasicParsing
+        }
+        Unblock-File -LiteralPath $copy -ErrorAction SilentlyContinue
+        if ((Get-ExecutionPolicy -Scope CurrentUser) -in 'Undefined', 'Restricted', 'AllSigned') {
+            Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
+        }
+        if (-not (Test-Path -LiteralPath $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
+        Add-Content -LiteralPath $PROFILE "`n$(Get-ShortcutLine)"
+        Say "  Shortcut added. In a new PowerShell window, just type: $name" 'Green'
+    } catch {
+        Say "  Could not change the shortcut: $($_.Exception.Message)" 'Red'
+    }
+}
+# Settings submenu for scripts whose only setting is the shortcut; returns 'back' or 'quit'
+function Show-ShortcutSettings([switch]$KeepCopy) {
+    while ($true) {
+        $short = if (Test-Shortcut) { 'on' } else { 'off' }
+        Say ""
+        Say "  ---------------- SETTINGS -------------------" 'Cyan'
+        Say ""
+        Say ("    1  -  Shortcut '{0}'   [{1}]" -f (Get-ShortcutName), $short) 'White'
+        Say "    2  -  Back" 'White'
+        Say "    0  -  Quit" 'White'
+        Say ""
+        switch (Read-MenuKey 'Choose 0-2' '012') {
+            '1' { Switch-Shortcut -KeepCopy:$KeepCopy }
+            '2' { return 'back' }
+            '0' { return 'quit' }
+        }
+    }
+}
+# <<< shortcut
 Set-WindowRight
 Clear-Host
-Say ""
-Say "  =============================================" 'Cyan'
-Say "        SYSTEM INFO COLLECTOR" 'Cyan'
-Say "  =============================================" 'Cyan'
-Say ""
-Say "    1  -  This Windows laptop" 'White'
-Say "    2  -  Android phone (USB cable needed)" 'White'
-Say "    3  -  Both" 'White'
-Say "    0  -  Quit" 'White'
-Say ""
-
-$choice = Read-MenuKey 'Choose 0-3' '0123'
-if ($choice -eq '0') { [Environment]::Exit(0) }   # Quit closes this window
+while ($true) {
+    Say ""
+    Say "  =============================================" 'Cyan'
+    Say "        SYSTEM INFO COLLECTOR" 'Cyan'
+    Say "  =============================================" 'Cyan'
+    Say ""
+    Say "    1  -  This Windows laptop" 'White'
+    Say "    2  -  Android phone (USB cable needed)" 'White'
+    Say "    3  -  Both" 'White'
+    Say "    4  -  Settings" 'White'
+    Say "    0  -  Quit" 'White'
+    Say ""
+    $choice = Read-MenuKey 'Choose 0-4' '01234'
+    if ($choice -eq '0') { [Environment]::Exit(0) }   # Quit closes this window
+    if ($choice -ne '4') { break }
+    if (@(Show-ShortcutSettings) -contains 'quit') { [Environment]::Exit(0) }
+    Clear-Host
+}
 
 $OutDir = Select-OutputFolder
 switch ($choice) {

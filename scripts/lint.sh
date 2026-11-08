@@ -108,6 +108,10 @@ for f in "${FILES[@]}"; do
         [[ "$l1" == "$(bootstrap "$f")" ]] || bad "$f" "bootstrap (line 1) is wrong (scripts/lint.sh --fix)"
         { grep -q '^# >>> layout$' "$f" && grep -q '^Set-WindowRight$' "$f"; } \
             || bad "$f" "needs the layout block and a top-level 'Set-WindowRight' call before the first screen"
+        if grep -q "Choose 0-" "$f"; then
+            { grep -q '^# >>> shortcut$' "$f" && grep -Eq 'Show-ShortcutSettings|Switch-Shortcut' "$f"; } \
+                || bad "$f" "a script with a menu needs the shortcut block and Settings > Shortcut"
+        fi
     elif [[ "$l1" != '# pwsh -File '* ]]; then
         bad "$f" "line 1 must be the bootstrap ('# irm ... | iex' or '# pwsh -File ...')"
     fi

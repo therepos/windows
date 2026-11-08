@@ -12,7 +12,7 @@ windows
 │   └── workflows
 ├── apps                    # one script per tool, one-word names
 └── scripts
-    ├── sync-blocks.sh      # standardise scripts (say, menukey, downloads, elevate, layout)
+    ├── sync-blocks.sh      # standardise scripts (say, menukey, downloads, elevate, layout, shortcut)
     ├── lint.sh             # diagnose and repair scripts
     └── docgen-pages.py     # build github pages
 ```
