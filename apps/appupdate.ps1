@@ -1,11 +1,11 @@
 # irm "https://github.com/therepos/windows/raw/main/apps/appupdate.ps1?$(Get-Random)" | iex
-# Purpose: Update all apps with winget every Sunday 23:45, closing open apps first and reopening them after
+# Purpose: Update all apps with winget weekly (default Sunday 23:45), closing open apps first and reopening them after
 # =============================================================================
 # Usage:
-#   1 = Weekly update   on/off; scheduled task Sundays 23:45, or at next start if missed
+#   1 = Weekly update   on/off; scheduled task on the set day and time, or at next start if missed
 #   2 = Update now      same update, in this window
 #   3 = Open log        %LOCALAPPDATA%\appupdate\update.log
-#   4 = Settings        'appupdate' shortcut (runs the local copy in %LOCALAPPDATA%\appupdate)
+#   4 = Settings        day and time (default Sunday 23:45); 'appupdate' shortcut (local copy in %LOCALAPPDATA%\appupdate)
 #   0 = Quit
 #
 # Note:
@@ -23,8 +23,14 @@ $LocalCopy = Join-Path $ToolDir 'appupdate.ps1'
 $LogFile   = Join-Path $ToolDir 'update.log'
 $LastFile  = Join-Path $ToolDir 'last.txt'
 $TaskName  = 'AppUpdate'
+$SettingsFile = Join-Path $ToolDir 'settings.json'
 $RunDay    = 'Sunday'
 $RunAt     = '23:45'
+try {
+    $saved = Get-Content -LiteralPath $SettingsFile -Raw -ErrorAction Stop | ConvertFrom-Json
+    if ($saved.Day)  { $RunDay = "$($saved.Day)" }
+    if ($saved.Time) { $RunAt  = "$($saved.Time)" }
+} catch {}
 $RunMode   = ($args -contains '-Run')      # set by the scheduled task
 
 $ProgressPreference = 'SilentlyContinue'
@@ -669,6 +675,59 @@ function Show-ShortcutSettings([switch]$KeepCopy) {
 # <<< shortcut
 
 # =====================================================================
+#  SETTINGS: day and time of the weekly update, shortcut
+# =====================================================================
+$Days = 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
+
+function Save-Schedule {
+    New-Item -ItemType Directory -Path $ToolDir -Force | Out-Null
+    @{ Day = $RunDay; Time = $RunAt } | ConvertTo-Json | Set-Content -LiteralPath $SettingsFile
+    # Move an existing weekly task to the new day and time
+    if ((Get-TaskState) -ne 'off') {
+        $trigger = New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek $RunDay -At $RunAt
+        Set-ScheduledTask -TaskName $TaskName -Trigger $trigger | Out-Null
+        Say "  Weekly update moved to $RunDay $RunAt." 'Green'
+    } else {
+        Say "  Saved. Turn on the weekly update to use it." 'Green'
+    }
+}
+
+function Show-Settings {
+    while ($true) {
+        $short = if (Test-Shortcut) { 'on' } else { 'off' }
+        Say ""
+        Say "  ---------------- SETTINGS -------------------" 'Cyan'
+        Say ""
+        Say "    1  -  Set day                [$RunDay]" 'White'
+        Say "    2  -  Set time               [$RunAt]" 'White'
+        Say "    3  -  Shortcut 'appupdate'   [$short]" 'White'
+        Say "    4  -  Back" 'White'
+        Say "    0  -  Quit" 'White'
+        Say ""
+        switch (Read-MenuKey 'Choose 0-4' '01234') {
+            '1' {
+                $in = "$(Read-Host "  Day, e.g. Sun or Sunday [$RunDay]")".Trim()
+                if (-not $in) { continue }
+                $match = @($Days | Where-Object { $in.Length -ge 2 -and $_.StartsWith($in, 'OrdinalIgnoreCase') })
+                if ($match.Count -ne 1) { Say "  Not a day: $in" 'Red'; continue }
+                $script:RunDay = $match[0]
+                Save-Schedule
+            }
+            '2' {
+                $in = "$(Read-Host "  Time, 24-hour HH:mm [$RunAt]")".Trim()
+                if (-not $in) { continue }
+                if ($in -notmatch '^([01]?\d|2[0-3]):([0-5]\d)$') { Say "  Not a time: $in (e.g. 23:45)" 'Red'; continue }
+                $script:RunAt = '{0:00}:{1}' -f [int]$Matches[1], $Matches[2]
+                Save-Schedule
+            }
+            '3' { Switch-Shortcut -KeepCopy:((Get-TaskState) -ne 'off') }
+            '4' { return 'back' }
+            '0' { return 'quit' }
+        }
+    }
+}
+
+# =====================================================================
 #  MOVE FROM THE OLD NAME (autoupdate): weekly task, shortcut, log
 # =====================================================================
 function Move-FromOldName {
@@ -789,7 +848,7 @@ while ($true) {
     $choice = Read-MenuKey 'Choose 0-4' '01234' $last
     if ($choice -eq '0') { break }
     if ($choice -eq '4') {
-        if (@(Show-ShortcutSettings -KeepCopy:((Get-TaskState) -ne 'off')) -contains 'quit') { break }
+        if (@(Show-Settings) -contains 'quit') { break }
         Clear-Host
         continue
     }
