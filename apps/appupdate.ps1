@@ -709,10 +709,9 @@ if ($RunMode) {
 # >>> layout
 function Set-WindowRight {
     try {
-        if (-not ('WinLayout.Native' -as [type])) {
-            Add-Type -Namespace WinLayout -Name Native -MemberDefinition @'
+        if (-not ('WinLayout.Api' -as [type])) {
+            Add-Type -Namespace WinLayout -Name Api -MemberDefinition @'
 [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
-[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
 [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
 [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
 [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr c);
@@ -720,40 +719,48 @@ function Set-WindowRight {
 [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr m, ref MONITORINFO mi);
 [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
 [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
+[DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint f);
 [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int cx, int cy, uint f);
 [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int a, out RECT r, int s);
 [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
 [StructLayout(LayoutKind.Sequential)] public struct MONITORINFO { public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags; }
 '@
         }
-        $h = [WinLayout.Native]::GetConsoleWindow()
-        if ($h -eq [IntPtr]::Zero -or -not [WinLayout.Native]::IsWindowVisible($h)) {
-            # Windows Terminal hides the console window: use its own window, in front at start
-            $h = [WinLayout.Native]::GetForegroundWindow()
-            $owner = [uint32]0
-            [void][WinLayout.Native]::GetWindowThreadProcessId($h, [ref]$owner)
-            if ((Get-Process -Id $owner -ErrorAction SilentlyContinue).ProcessName -ne 'WindowsTerminal') { return }
+        # Classic console: its own window. Windows Terminal: the hidden console window is owned
+        # by the Terminal window hosting this tab (it may still be opening: wait up to 3 s)
+        $h = [IntPtr]::Zero
+        for ($i = 0; $i -lt 15 -and $h -eq [IntPtr]::Zero; $i++) {
+            $c = [WinLayout.Api]::GetConsoleWindow()
+            if ($c -ne [IntPtr]::Zero -and [WinLayout.Api]::IsWindowVisible($c)) { $h = $c; break }
+            $o = if ($c -ne [IntPtr]::Zero) { [WinLayout.Api]::GetAncestor($c, 3) } else { [IntPtr]::Zero }
+            if ($o -ne [IntPtr]::Zero -and $o -ne $c -and [WinLayout.Api]::IsWindowVisible($o)) { $h = $o; break }
+            Start-Sleep -Milliseconds 200
         }
-        $oldDpi = [WinLayout.Native]::SetThreadDpiAwarenessContext([IntPtr](-4))
+        if ($h -eq [IntPtr]::Zero) { return }
+        $owner = [uint32]0
+        [void][WinLayout.Api]::GetWindowThreadProcessId($h, [ref]$owner)
+        if ((Get-Process -Id $owner -ErrorAction SilentlyContinue).ProcessName -notin
+            'WindowsTerminal', 'conhost', 'OpenConsole', 'powershell', 'pwsh') { return }
+        $oldDpi = [WinLayout.Api]::SetThreadDpiAwarenessContext([IntPtr](-4))
         try {
-            [void][WinLayout.Native]::ShowWindow($h, 9)
-            $mi = New-Object WinLayout.Native+MONITORINFO
+            [void][WinLayout.Api]::ShowWindow($h, 9)
+            $mi = New-Object WinLayout.Api+MONITORINFO
             $mi.cbSize = 40
-            [void][WinLayout.Native]::GetMonitorInfo([WinLayout.Native]::MonitorFromWindow($h, 2), [ref]$mi)
+            [void][WinLayout.Api]::GetMonitorInfo([WinLayout.Api]::MonitorFromWindow($h, 2), [ref]$mi)
             $w = $mi.rcWork
             $half = [int][Math]::Floor(($w.Right - $w.Left) / 2)
             # Grow by the invisible resize borders so the visible frame fills the half exactly
-            $wr = New-Object WinLayout.Native+RECT
-            $fr = New-Object WinLayout.Native+RECT
-            [void][WinLayout.Native]::GetWindowRect($h, [ref]$wr)
+            $wr = New-Object WinLayout.Api+RECT
+            $fr = New-Object WinLayout.Api+RECT
+            [void][WinLayout.Api]::GetWindowRect($h, [ref]$wr)
             $l = 0; $r = 0; $b = 0
-            if ([WinLayout.Native]::DwmGetWindowAttribute($h, 9, [ref]$fr, 16) -eq 0) {
+            if ([WinLayout.Api]::DwmGetWindowAttribute($h, 9, [ref]$fr, 16) -eq 0) {
                 $l = $fr.Left - $wr.Left; $r = $wr.Right - $fr.Right; $b = $wr.Bottom - $fr.Bottom
             }
-            [void][WinLayout.Native]::SetWindowPos($h, [IntPtr]::Zero, ($w.Left + $half - $l), $w.Top,
+            [void][WinLayout.Api]::SetWindowPos($h, [IntPtr]::Zero, ($w.Left + $half - $l), $w.Top,
                 ($w.Right - $w.Left - $half + $l + $r), ($w.Bottom - $w.Top + $b), 0x0014)
         } finally {
-            if ($oldDpi -ne [IntPtr]::Zero) { [void][WinLayout.Native]::SetThreadDpiAwarenessContext($oldDpi) }
+            if ($oldDpi -ne [IntPtr]::Zero) { [void][WinLayout.Api]::SetThreadDpiAwarenessContext($oldDpi) }
         }
     } catch {}
 }
