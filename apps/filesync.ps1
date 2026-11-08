@@ -147,46 +147,65 @@ function Confirm-Folders([string[]]$Which = @('A', 'B')) {
     }
 }
 
-# Optional one-word shortcut: typing `filesync` in any new PowerShell window runs a local copy
-# of this script saved in %LOCALAPPDATA%\filesync (nothing is fetched from the internet)
-$ScriptFile   = $PSCommandPath
-$LocalScript  = Join-Path $ToolDir 'filesync.ps1'
-$ShortcutLine = 'function filesync { & "$env:LOCALAPPDATA\filesync\filesync.ps1" }'
-
+# >>> shortcut
+function Get-ShortcutName { [IO.Path]::GetFileNameWithoutExtension(([uri]$ScriptUrl).AbsolutePath) }
+function Get-ShortcutCopy { $n = Get-ShortcutName; Join-Path (Join-Path $env:LOCALAPPDATA $n) "$n.ps1" }
+function Get-ShortcutLine { 'function {0} {{ & "$env:LOCALAPPDATA\{0}\{0}.ps1" }}' -f (Get-ShortcutName) }
 function Test-Shortcut {
-    (Test-Path -LiteralPath $PROFILE) -and (Test-Path -LiteralPath $LocalScript) -and
-        (@(Get-Content -LiteralPath $PROFILE -ErrorAction SilentlyContinue) -contains $ShortcutLine)
+    (Test-Path -LiteralPath $PROFILE) -and (Test-Path -LiteralPath (Get-ShortcutCopy)) -and
+        (@(Get-Content -LiteralPath $PROFILE -ErrorAction SilentlyContinue) -contains (Get-ShortcutLine))
 }
-
-function Switch-Shortcut {
+function Switch-Shortcut([switch]$KeepCopy) {
+    $name = Get-ShortcutName
+    $copy = Get-ShortcutCopy
     try {
         $on = Test-Shortcut
+        # Remove any shortcut of this name, including older ones that downloaded the script each time
         if (Test-Path -LiteralPath $PROFILE) {
-            @(Get-Content -LiteralPath $PROFILE) | Where-Object { $_ -notmatch '^function filesync ' } | Set-Content -LiteralPath $PROFILE
+            @(Get-Content -LiteralPath $PROFILE) | Where-Object { $_ -notmatch "^function $name " } | Set-Content -LiteralPath $PROFILE
         }
         if ($on) {
-            Remove-Item -LiteralPath $LocalScript -Force -ErrorAction SilentlyContinue
+            if (-not $KeepCopy) { Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue }
             Say "  Shortcut removed." 'Green'
             return
         }
-        New-Item -ItemType Directory -Path $ToolDir -Force | Out-Null
-        if ($ScriptFile -and (Test-Path -LiteralPath $ScriptFile)) {
-            if ($ScriptFile -ne $LocalScript) { Copy-Item -LiteralPath $ScriptFile -Destination $LocalScript -Force }
+        New-Item -ItemType Directory -Path (Split-Path -Path $copy -Parent) -Force | Out-Null
+        if ($PSCommandPath -and (Test-Path -LiteralPath $PSCommandPath)) {
+            if ($PSCommandPath -ne $copy) { Copy-Item -LiteralPath $PSCommandPath -Destination $copy -Force }
         } else {
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-            Invoke-WebRequest -Uri $ScriptUrl -OutFile $LocalScript -UseBasicParsing
+            Invoke-WebRequest -Uri "${ScriptUrl}?$(Get-Random)" -OutFile $copy -UseBasicParsing
         }
-        Unblock-File -LiteralPath $LocalScript -ErrorAction SilentlyContinue
+        Unblock-File -LiteralPath $copy -ErrorAction SilentlyContinue
         if ((Get-ExecutionPolicy -Scope CurrentUser) -in 'Undefined', 'Restricted', 'AllSigned') {
             Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
         }
         if (-not (Test-Path -LiteralPath $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
-        Add-Content -LiteralPath $PROFILE "`n$ShortcutLine"
-        Say "  Shortcut added. In a new PowerShell window, just type: filesync" 'Green'
+        Add-Content -LiteralPath $PROFILE "`n$(Get-ShortcutLine)"
+        Say "  Shortcut added. In a new PowerShell window, just type: $name" 'Green'
     } catch {
         Say "  Could not change the shortcut: $($_.Exception.Message)" 'Red'
     }
 }
+# Settings submenu for scripts whose only setting is the shortcut; returns 'back' or 'quit'
+function Show-ShortcutSettings([switch]$KeepCopy) {
+    while ($true) {
+        $short = if (Test-Shortcut) { 'on' } else { 'off' }
+        Say ""
+        Say "  ---------------- SETTINGS -------------------" 'Cyan'
+        Say ""
+        Say ("    1  -  Shortcut '{0}'   [{1}]" -f (Get-ShortcutName), $short) 'White'
+        Say "    2  -  Back" 'White'
+        Say "    0  -  Quit" 'White'
+        Say ""
+        switch (Read-MenuKey 'Choose 0-2' '012') {
+            '1' { Switch-Shortcut -KeepCopy:$KeepCopy }
+            '2' { return 'back' }
+            '0' { return 'quit' }
+        }
+    }
+}
+# <<< shortcut
 
 function Show-Settings {
     while ($true) {

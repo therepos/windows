@@ -19,7 +19,7 @@ One-click Windows scripts for a non-technical user. Scripts are run straight fro
   copy of the same script.
 - Header (see Documentation): line 1 the bootstrap, line 2 `# Purpose:`, then a fence.
 - Shared blocks: regions between `# >>> <name>` and `# <<< <name>` are copies of the blocks in
-  `scripts/sync-blocks.sh` (`say`, `menukey`, `downloads`, `elevate`, `layout`). Never edit inside the markers; edit the block
+  `scripts/sync-blocks.sh` (`say`, `menukey`, `downloads`, `elevate`, `layout`, `shortcut`). Never edit inside the markers; edit the block
   there, then run it or `scripts/lint.sh --fix`. Per-script code goes outside. Shared look and behaviour
   belongs in a block, so changing it never touches a script's features.
 - `.ps1` files are ASCII only: Windows PowerShell 5.1 misreads other characters in files without a BOM.
@@ -51,10 +51,12 @@ One-click Windows scripts for a non-technical user. Scripts are run straight fro
 - Settings, when there are any, is its own submenu: `Set <thing>   [current value]`,
   `N  -  Back`, `0  -  Quit`, saved between runs. Blank keeps the current value or
   restores the default.
-- Settings may offer `Shortcut '<name>'  [on/off]`: saves a local copy in `%LOCALAPPDATA%\<name>` and adds
+- Every script with a menu offers `Settings` > `Shortcut '<name>'  [on/off]` via the `shortcut` shared block
+  (name from `$ScriptUrl`, which every script defines): it saves a local copy in `%LOCALAPPDATA%\<name>` and adds
   or removes `function <name> { & "$env:LOCALAPPDATA\<name>\<name>.ps1" }` in `$PROFILE` (setting CurrentUser
-  execution policy to RemoteSigned if needed). Nothing is fetched when the shortcut runs; turning it off
-  and on again refreshes the copy (see zipper.ps1).
+  execution policy to RemoteSigned if needed). Nothing is fetched when the shortcut runs; turning it off and on
+  again refreshes the copy. Scripts whose only setting is the shortcut call `Show-ShortcutSettings`; others
+  list `Shortcut` in their own Settings and call `Test-Shortcut` / `Switch-Shortcut`. Lint checks it.
 - Output via `Say <text> <colour>`: Cyan headings, White options, Green done, Yellow
   notes, Red errors, DarkGray progress.
 - Default output folder is the user's real Downloads folder (registry Shell Folders).

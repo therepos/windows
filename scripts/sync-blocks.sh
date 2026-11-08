@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Purpose: Copy the shared blocks (say, menukey, downloads, elevate, layout) into every PowerShell script
+# Purpose: Copy the shared blocks (say, menukey, downloads, elevate, layout, shortcut) into every PowerShell script
 # =============================================================================
 # Usage:
 #   scripts/sync-blocks.sh           copy each block into every script that has its markers
@@ -13,7 +13,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # --- Blocks ------------------------------------------------------------------
-BLOCK_NAMES=(say menukey downloads elevate layout)
+BLOCK_NAMES=(say menukey downloads elevate layout shortcut)
 
 # say: coloured console output
 # shellcheck disable=SC2034  # read via ${!var} below
@@ -164,6 +164,71 @@ function Set-WindowRight {
             if ($oldDpi -ne [IntPtr]::Zero) { [void][WinLayout.Api]::SetThreadDpiAwarenessContext($oldDpi) }
         }
     } catch {}
+}
+BLOCK
+)
+
+# shortcut: Settings > Shortcut '<name>'. Saves a local copy in %LOCALAPPDATA%\<name> and adds
+# `function <name>` to $PROFILE, so typing the name runs it with nothing fetched. Name from $ScriptUrl.
+# Needs Say and Read-MenuKey. -KeepCopy: another feature (e.g. a scheduled task) still runs the copy.
+# shellcheck disable=SC2034  # read via ${!var} below
+BLOCK_shortcut=$(cat <<'BLOCK'
+function Get-ShortcutName { [IO.Path]::GetFileNameWithoutExtension(([uri]$ScriptUrl).AbsolutePath) }
+function Get-ShortcutCopy { $n = Get-ShortcutName; Join-Path (Join-Path $env:LOCALAPPDATA $n) "$n.ps1" }
+function Get-ShortcutLine { 'function {0} {{ & "$env:LOCALAPPDATA\{0}\{0}.ps1" }}' -f (Get-ShortcutName) }
+function Test-Shortcut {
+    (Test-Path -LiteralPath $PROFILE) -and (Test-Path -LiteralPath (Get-ShortcutCopy)) -and
+        (@(Get-Content -LiteralPath $PROFILE -ErrorAction SilentlyContinue) -contains (Get-ShortcutLine))
+}
+function Switch-Shortcut([switch]$KeepCopy) {
+    $name = Get-ShortcutName
+    $copy = Get-ShortcutCopy
+    try {
+        $on = Test-Shortcut
+        # Remove any shortcut of this name, including older ones that downloaded the script each time
+        if (Test-Path -LiteralPath $PROFILE) {
+            @(Get-Content -LiteralPath $PROFILE) | Where-Object { $_ -notmatch "^function $name " } | Set-Content -LiteralPath $PROFILE
+        }
+        if ($on) {
+            if (-not $KeepCopy) { Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue }
+            Say "  Shortcut removed." 'Green'
+            return
+        }
+        New-Item -ItemType Directory -Path (Split-Path -Path $copy -Parent) -Force | Out-Null
+        if ($PSCommandPath -and (Test-Path -LiteralPath $PSCommandPath)) {
+            if ($PSCommandPath -ne $copy) { Copy-Item -LiteralPath $PSCommandPath -Destination $copy -Force }
+        } else {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri "${ScriptUrl}?$(Get-Random)" -OutFile $copy -UseBasicParsing
+        }
+        Unblock-File -LiteralPath $copy -ErrorAction SilentlyContinue
+        if ((Get-ExecutionPolicy -Scope CurrentUser) -in 'Undefined', 'Restricted', 'AllSigned') {
+            Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
+        }
+        if (-not (Test-Path -LiteralPath $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
+        Add-Content -LiteralPath $PROFILE "`n$(Get-ShortcutLine)"
+        Say "  Shortcut added. In a new PowerShell window, just type: $name" 'Green'
+    } catch {
+        Say "  Could not change the shortcut: $($_.Exception.Message)" 'Red'
+    }
+}
+# Settings submenu for scripts whose only setting is the shortcut; returns 'back' or 'quit'
+function Show-ShortcutSettings([switch]$KeepCopy) {
+    while ($true) {
+        $short = if (Test-Shortcut) { 'on' } else { 'off' }
+        Say ""
+        Say "  ---------------- SETTINGS -------------------" 'Cyan'
+        Say ""
+        Say ("    1  -  Shortcut '{0}'   [{1}]" -f (Get-ShortcutName), $short) 'White'
+        Say "    2  -  Back" 'White'
+        Say "    0  -  Quit" 'White'
+        Say ""
+        switch (Read-MenuKey 'Choose 0-2' '012') {
+            '1' { Switch-Shortcut -KeepCopy:$KeepCopy }
+            '2' { return 'back' }
+            '0' { return 'quit' }
+        }
+    }
 }
 BLOCK
 )
