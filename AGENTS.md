@@ -75,7 +75,9 @@ always work. Proxmox tools: `therepos/proxmox`; MCP servers: `therepos/mcp`; Cla
 - `scripts/lint.sh --fix --changed origin/main` must pass (needs `pwsh`, `shellcheck`). `--fix` repairs the
   bootstrap, shared blocks and CRLF; fix the rest by hand. Block or lint changes re-check every script.
 - CI lints every PR and push (all scripts weekly) and pushes safe fixes to the PR branch, never to `main`.
-- Work on a branch, open a PR, merge only when lint is green.
+- Work on a branch and open a PR (`gh api repos/<owner>/<repo>/pulls`; GraphQL `gh pr` commands are blocked here);
+  merge only when lint is green. Commit before tests that run `git checkout`, and check each edit landed
+  (`git diff`) before reporting it.
 - Scripts cannot be run here: say so and list what to test on Windows.
 - Check quoting (`ConvertTo-Arg` for 7-Zip), `-LiteralPath` for user paths, menus via `[Console]::ReadKey`,
   other prompts via `Read-Host`, and that `Test-Path` on user text cannot print an error.
