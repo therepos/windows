@@ -81,7 +81,7 @@ always work. Proxmox tools: `therepos/proxmox`; MCP servers: `therepos/mcp`; Cla
   bootstrap, shared blocks and CRLF; fix the rest by hand. Block or lint changes re-check every script.
 - CI lints every PR and push (all scripts weekly) and pushes safe fixes to the PR branch, never to `main`.
 - Work on a branch and open a PR (`gh api repos/<owner>/<repo>/pulls`; GraphQL `gh pr` commands are blocked here);
-  merge only when lint is green. Run negative tests on a temp copy, never via `git checkout` (it drops uncommitted edits), and check each edit landed
+  merge it yourself, without asking, as soon as lint is green. Run negative tests on a temp copy, never via `git checkout` (it drops uncommitted edits), and check each edit landed
   (`git diff`) before reporting it.
 - Scripts cannot be run here: say so and list what to test on Windows.
 - Check quoting (`ConvertTo-Arg` for 7-Zip), `-LiteralPath` for user paths, menus via `[Console]::ReadKey`,
