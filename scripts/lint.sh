@@ -162,6 +162,9 @@ for f in "${FILES[@]}"; do
         && bad "$f" "Usage entries must be one line each (no wrapping)"
 done
 
+# --- Script page: every script has a display name (all scripts; fast) -------
+while IFS= read -r msg; do bad "${msg%%:*}" "${msg#*: }"; done < <(python3 scripts/docgen-pages.py --check)
+
 # --- Shared-block copies match the source (all scripts; fast) ----------------
 scripts/sync-blocks.sh --check >/dev/null || bad "scripts/sync-blocks.sh" "shared blocks out of sync (scripts/lint.sh --fix)"
 
