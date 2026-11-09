@@ -33,7 +33,6 @@ NAMES = {
     'kbbundle': 'KB Bundle',
     'kbprofile': 'KB Profile',
     'kbrcm': 'KB RCM',
-    'lagcheck': 'Lag Check',
     'oleextract': 'OLE Extract',
     'scanfiles': 'Scan Files',
     'smbcache': 'SMB Cache',
