@@ -10,8 +10,8 @@ always work. Proxmox tools: `therepos/proxmox`; MCP servers: `therepos/mcp`; Cla
   (knowledge-base stages `kbprofile`, `kbrcm`, `kbbundle`; plan in `apps/kbplan.md`).
 - `scripts/` (repo helpers, never run by users): `sync-blocks.sh` shared blocks, `lint.sh` checks and safe
   fixes, `docgen-pages.py` the script page (therepos.github.io/windows, built and deployed by CI).
-- Script page: title `Windows Scripts`, one row per script (name, purpose, button: `Copy command` or `Download .<ext>`,
-  one width), repo link in the footer.
+- Script page: title `Windows Scripts`, one row per script (name, purpose, icon buttons: copy command for
+  bootstrap scripts, download for every script; hover text `Copy command` / `Download .<ext>`), GitHub icon link in the footer.
   Each script needs a display name in `NAMES` in `docgen-pages.py` (lint checks): Title Case words split at
   word boundaries, acronyms in caps (`KB RCM`, `SMB Cache`, `Add-in Setup`).
 
