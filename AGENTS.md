@@ -50,6 +50,9 @@ always work. Proxmox tools: `therepos/proxmox`; MCP servers: `therepos/mcp`; Cla
 - Settings is a submenu: `Set <thing>   [current value]`, `N  -  Back`, `0  -  Quit`, saved between runs;
   blank keeps the current value.
 - Output files: `<Kind> <Subject> yyyyMMdd-HHmm`, device model names as one word with dashes.
+- Reports follow `apps/report-pve.sh` in therepos/proxmox: title line, `SYSTEM MAP` (tree) and `HEALTH SUMMARY`
+  (`!!` per issue) first, then `========== SECTION ==========` with `---- sub ----`, `END OF REPORT` last. Each section
+  runs time-boxed and tolerant, prints `[ OK ]`/`[WARN] <section>` on screen, and filters noise (defaults, duplicates, repeats).
 
 ## Headers
 

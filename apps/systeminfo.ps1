@@ -1,15 +1,16 @@
 # irm "https://github.com/therepos/windows/raw/main/apps/systeminfo.ps1?$(Get-Random)" | iex
-# Purpose: Collect raw hardware/software info from a Windows laptop and/or Android phone
+# Purpose: Write a configuration/health report of a Windows laptop and/or Android phone to a text file
 # =============================================================================
 # Usage:
 #   1 = Windows laptop
-#   2 = Android phone
+#   2 = Android phone   USB cable, USB debugging on
 #   3 = Both
 #   4 = Settings        'systeminfo' shortcut (runs a local copy in %LOCALAPPDATA%\systeminfo)
 #   0 = Quit
 #
 # Note:
-#   Output: folder asked, default Downloads
+#   Needs admin (asks once)
+#   Output: Data System <model> yyyyMMdd-HHmm.txt, Data Phone <model> yyyyMMdd-HHmm.txt (folder asked, default Downloads)
 # =============================================================================
 
 $ScriptUrl = 'https://github.com/therepos/windows/raw/main/apps/systeminfo.ps1'
@@ -61,16 +62,15 @@ function ConvertTo-OneWord([string]$s) {
     $s = ($s -replace '[\\/:*?"<>|]', '').Trim() -replace '\s+', '-'
     if ($s) { $s } else { 'Unknown' }
 }
-
-function Get-LaptopModel {
+# Readable model name; Lenovo reports a part code (e.g. 21CB0020US) as Model and the name in Version
+function Get-LaptopModelName {
     $cs = Get-CimInstance Win32_ComputerSystem
     $model = $cs.Model
-    # Lenovo reports a part code (e.g. 21CB0020US) as Model; the readable name is in Version
     if ($cs.Manufacturer -match 'LENOVO') {
         $friendly = (Get-CimInstance Win32_ComputerSystemProduct).Version
         if ($friendly) { $model = $friendly }
     }
-    ConvertTo-OneWord $model
+    "$model".Trim()
 }
 
 # >>> say
@@ -128,126 +128,458 @@ function Select-OutputFolder {
     }
 }
 
-function Finish-Report {
-    param([string]$Path, [string]$Label)
+# =====================================================================
+#  REPORT ENGINE
+# =====================================================================
+$SectionTimeout = 90
+$script:Out     = New-Object System.Collections.Generic.List[string]
+$script:OutPath = $null
+$script:Rs      = $null
+
+# Loaded once into the runspace that runs the sections
+$RsInit = @'
+$ErrorActionPreference = 'SilentlyContinue'
+$ProgressPreference    = 'SilentlyContinue'
+$T = "$([char]0x251C)$([char]0x2500)$([char]0x2500) "
+$L = "$([char]0x2514)$([char]0x2500)$([char]0x2500) "
+function Sub([string]$t) { ''; "---- $t ----" }
+function Row([string]$k, $v) { '{0,-24} {1}' -f $k, $v }
+function Tree([string[]]$rows) { for ($i = 0; $i -lt $rows.Count; $i++) { $(if ($i -eq $rows.Count - 1) { $L } else { $T }) + $rows[$i] } }
+function OrNone($v, [string]$text = '(none)') { if (@($v | Where-Object { $null -ne $_ -and "$_" -ne '' }).Count) { $v } else { $text } }
+function Short([string]$s, [int]$n = 160) {
+    if (-not $s) { return '' }
+    $s = ($s -replace '\s+', ' ').Trim()
+    if ($s.Length -gt $n) { $s.Substring(0, $n) + '...' } else { $s }
+}
+function Norm([string]$s) { $s -replace '\{[0-9A-Fa-f-]{36}\}', '{GUID}' -replace '0x[0-9A-Fa-f]+', '0xN' -replace '\b\d+\b', 'N' }
+function Chars($a) { -join ($a | Where-Object { $_ } | ForEach-Object { [char]$_ }) }
+
+# --- Windows ---
+$DevCodes = @{ 1 = 'not configured'; 3 = 'driver corrupt'; 10 = 'cannot start'; 12 = 'not enough resources'; 14 = 'needs restart'
+    18 = 'reinstall driver'; 19 = 'registry problem'; 22 = 'disabled'; 24 = 'not present'; 28 = 'no driver'; 31 = 'driver failed to load'
+    32 = 'driver disabled'; 37 = 'driver failed to start'; 39 = 'driver missing'; 43 = 'stopped after a problem'; 48 = 'driver blocked'; 52 = 'unsigned driver' }
+function Get-ProblemDevices { @(Get-CimInstance Win32_PnPEntity -Filter 'ConfigManagerErrorCode <> 0') }
+function Get-FixedVolumes { @(Get-Volume | Where-Object { $_.DriveLetter -and $_.DriveType -eq 'Fixed' -and $_.Size } | Sort-Object DriveLetter) }
+function Get-PendingReboot {
+    $r = @()
+    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') { $r += 'component servicing' }
+    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') { $r += 'Windows Update' }
+    $r -join ', '
+}
+function Get-LastUpdate { @(Get-HotFix | Where-Object InstalledOn | Sort-Object InstalledOn -Descending) | Select-Object -First 1 }
+function Get-SecureBoot { try { if (Confirm-SecureBootUEFI -ErrorAction Stop) { 'on' } else { 'off' } } catch { 'not supported (legacy BIOS)' } }
+# powercfg's battery report, read once per run
+function Get-Battery {
+    if (-not $global:BatDone) {
+        $global:BatDone = $true
+        $global:Bat = @()
+        $x = Join-Path $env:TEMP "systeminfo-battery-$PID.xml"
+        powercfg /batteryreport /xml /output $x | Out-Null
+        if (Test-Path -LiteralPath $x) {
+            $global:BatXml = [xml](Get-Content -LiteralPath $x -Raw)
+            Remove-Item -LiteralPath $x -Force
+            $global:Bat = @(foreach ($b in @($global:BatXml.BatteryReport.Batteries.Battery)) {
+                if (-not $b) { continue }
+                $design = [double]$b.DesignCapacity
+                $full   = [double]$b.FullChargeCapacity
+                [pscustomobject]@{
+                    Id           = $b.Id
+                    Manufacturer = $b.Manufacturer
+                    Chemistry    = $b.Chemistry
+                    Design_mWh   = $design
+                    Full_mWh     = $full
+                    HealthPct    = if ($design -gt 0) { [math]::Round($full / $design * 100, 1) } else { $null }
+                    Cycles       = $b.CycleCount
+                }
+            })
+        }
+    }
+    $global:Bat
+}
+
+# --- Android (adb) ---
+$BatHealth = @{ '1' = 'unknown'; '2' = 'good'; '3' = 'overheat'; '4' = 'dead'; '5' = 'over voltage'; '6' = 'failure'; '7' = 'cold' }
+$BatStatus = @{ '1' = 'unknown'; '2' = 'charging'; '3' = 'discharging'; '4' = 'not charging'; '5' = 'full' }
+function A { & $Adb -s $Serial @args 2>$null | ForEach-Object { "$_".TrimEnd() } }
+function Get-Props {
+    if (-not $global:Props) {
+        $h = @{}
+        foreach ($l in (A shell getprop)) { if ($l -match '^\[(.+?)\]: \[(.*)\]$') { $h[$matches[1]] = $matches[2] } }
+        $global:Props = $h
+    }
+    $global:Props
+}
+function Get-PhoneBattery {
+    $h = @{}
+    foreach ($l in (A shell dumpsys battery)) { if ($l -match '^\s+([^:]+):\s*(.*)$') { $h[$matches[1].Trim()] = $matches[2].Trim() } }
+    $h
+}
+# Cycle count and capacity, where the phone exposes them without root
+function Get-PhoneCapacity {
+    $r = @{}
+    foreach ($n in 'cycle_count', 'charge_full', 'charge_full_design') {
+        $x = "$(A shell cat "/sys/class/power_supply/battery/$n")".Trim()
+        if ($x -match '^\d+$') { $r[$n] = [double]$x }
+    }
+    if ($r['charge_full'] -and $r['charge_full_design']) { $r['pct'] = [math]::Round($r['charge_full'] / $r['charge_full_design'] * 100) }
+    $r
+}
+function Get-DataUse {
+    $f = -split (@(A shell df -k /data) | Select-Object -Last 1)
+    if ($f.Count -ge 4 -and $f[1] -match '^\d+$' -and [double]$f[1] -gt 0) {
+        [pscustomobject]@{ TotalGB = [math]::Round([double]$f[1] / 1MB, 1); UsedGB = [math]::Round([double]$f[2] / 1MB, 1); Pct = [math]::Round([double]$f[2] / [double]$f[1] * 100) }
+    }
+}
+function Get-Crashes { @(A logcat -d -b crash) }
+function Get-CrashApps($lines) { foreach ($l in $lines) { if ($l -match 'Process: ([\w.:]+)' -or $l -match '>>> (\S+) <<<') { $matches[1] } } }
+'@
+
+function Save-Report { if ($script:OutPath) { [IO.File]::WriteAllLines($script:OutPath, [string[]]$script:Out) } }
+
+function Get-SectionRunspace([hashtable]$Vars) {
+    if (-not $script:Rs -or $script:Rs.RunspaceStateInfo.State -ne 'Opened') {
+        $script:Rs = [runspacefactory]::CreateRunspace()
+        $script:Rs.Open()
+        $ps = [PowerShell]::Create()
+        $ps.Runspace = $script:Rs
+        [void]$ps.AddScript($RsInit).Invoke()
+        $ps.Dispose()
+    }
+    foreach ($k in $Vars.Keys) { $script:Rs.SessionStateProxy.SetVariable($k, $Vars[$k]) }
+    $script:Rs
+}
+
+# Runs one section in the background runspace: a failing command is noted, not fatal,
+# and a section that hangs (a stuck driver query, an adb call to a phone that went away) is abandoned
+function Invoke-Collect([string]$Label, [scriptblock]$Body, [hashtable]$Vars) {
+    $script:Out.Add('')
+    $script:Out.Add("========== $Label ==========")
+    $ps = [PowerShell]::Create()
+    $ps.Runspace = Get-SectionRunspace $Vars
+    [void]$ps.AddScript("& {`n$Body`n} | Out-String -Width 220")
+    $state = 'ok'
+    $text = ''
+    $h = $ps.BeginInvoke()
+    if ($h.AsyncWaitHandle.WaitOne($SectionTimeout * 1000)) {
+        try { $text = (@($ps.EndInvoke($h)) | ForEach-Object { "$_" }) -join "`n" } catch { $state = 'failed' }
+        $ps.Dispose()
+    } else {
+        [void]$ps.BeginStop($null, $null)
+        $script:Rs = $null
+        $state = 'timeout'
+    }
+    # Trailing spaces off, runs of blank lines collapsed to one
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($l in ($text -split '\r?\n')) {
+        $l = $l.TrimEnd()
+        if ($l -or ($lines.Count -and $lines[$lines.Count - 1])) { $lines.Add($l) }
+    }
+    while ($lines.Count -and -not $lines[$lines.Count - 1]) { $lines.RemoveAt($lines.Count - 1) }
+    if (-not $lines.Count -and $state -eq 'ok') { $lines.Add('(none)') }
+    $script:Out.AddRange($lines)
+    switch ($state) {
+        'ok'      { Say "  [ OK ] $Label" 'Green' }
+        'timeout' {
+            $script:Out.Add("(timed out after ${SectionTimeout}s - skipped)")
+            Say "  [WARN] $Label - timed out after ${SectionTimeout}s" 'Yellow'
+        }
+        default   {
+            $script:Out.Add('(unavailable or command failed)')
+            Say "  [WARN] $Label - unavailable, skipped" 'Yellow'
+        }
+    }
+    Save-Report
+}
+
+# $Sections: label, scriptblock, label, scriptblock, ...
+function Write-Report([string]$Path, [string]$Title, [string]$Subject, [string]$Hint, [hashtable]$Vars, [object[]]$Sections) {
+    $script:Out.Clear()
+    $script:OutPath = $Path
+    $script:Out.Add("==================== $Title REPORT: $(Get-Date -Format 'yyyy-MM-dd HH:mm') ====================")
+    $script:Out.Add($Subject)
+    Save-Report
     Say ""
-    Say "  DONE - $Label" 'Green'
-    Say "  Saved to: $Path" 'Green'
-    Say "  NOTE: raw output. Contains serials, MACs and IPs - check before sharing." 'DarkYellow'
-    Say ""
+    Say "  [INFO] Writing $Title report to: $Path" 'Cyan'
+    Say "  [INFO] $Hint" 'Cyan'
+    for ($i = 0; $i -lt $Sections.Count; $i += 2) { Invoke-Collect $Sections[$i] $Sections[$i + 1] $Vars }
+    $script:Out.Add('')
+    $script:Out.Add('==================== END OF REPORT ====================')
+    Save-Report
+    Say "  [ OK ] Report complete: $Path" 'Green'
+    Say "  [INFO] Contains serials, MACs and IPs - review before sharing." 'Yellow'
 }
 
 # =====================================================================
 #  OPTION 1 - WINDOWS LAPTOP
 # =====================================================================
-function Get-LaptopReport {
-    $out = Join-Path $OutDir "Data System $(Get-LaptopModel) $Stamp.txt"
-    Say ""
-    Say "  Collecting laptop info. This takes about 1-2 minutes..." 'Cyan'
-    Say ""
-
-    Start-Transcript -Path $out -Force | Out-Null
-
-    Say "  [1/12] Operating system..." 'DarkGray'
-    "=== OS ==="
-    Get-ComputerInfo | Select-Object OsName,OsVersion,OsBuildNumber,WindowsVersion,OsArchitecture,CsName,CsManufacturer,CsModel,CsSystemType,BiosSMBIOSBIOSVersion,BiosReleaseDate,BiosSeralNumber,OsUptime,OsInstallDate,TimeZone | Format-List
-
-    Say "  [2/12] Processor..." 'DarkGray'
-    "=== CPU ==="
-    Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed,L3CacheSize,VirtualizationFirmwareEnabled | Format-List
-
-    Say "  [3/12] Memory..." 'DarkGray'
-    "=== RAM ==="
-    Get-CimInstance Win32_PhysicalMemory | Select-Object BankLabel,@{n='CapacityGB';e={[math]::Round($_.Capacity/1GB,1)}},Speed,ConfiguredClockSpeed,Manufacturer,PartNumber,SerialNumber | Format-Table -AutoSize
-    Get-CimInstance Win32_OperatingSystem | Select-Object @{n='TotalRAM_GB';e={[math]::Round($_.TotalVisibleMemorySize/1MB,1)}},@{n='FreeRAM_GB';e={[math]::Round($_.FreePhysicalMemory/1MB,1)}} | Format-List
-
-    Say "  [4/12] Graphics..." 'DarkGray'
-    "=== GPU / DISPLAY ==="
-    Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion,DriverDate,VideoModeDescription,CurrentRefreshRate,VideoProcessor | Format-List
-
-    Say "  [5/12] Storage..." 'DarkGray'
-    "=== PHYSICAL DISKS ==="
-    Get-PhysicalDisk | Select-Object FriendlyName,SerialNumber,MediaType,BusType,@{n='SizeGB';e={[math]::Round($_.Size/1GB,0)}},HealthStatus,FirmwareVersion | Format-Table -AutoSize
-    "=== VOLUMES ==="
-    Get-Volume | Where-Object DriveLetter | Select-Object DriveLetter,FileSystemLabel,FileSystem,@{n='SizeGB';e={[math]::Round($_.Size/1GB,1)}},@{n='FreeGB';e={[math]::Round($_.SizeRemaining/1GB,1)}},HealthStatus | Format-Table -AutoSize
-
-    Say "  [6/12] Security (TPM / BitLocker / Secure Boot)..." 'DarkGray'
-    "=== SECURITY ==="
-    Get-BitLockerVolume | Select-Object MountPoint,VolumeStatus,ProtectionStatus,EncryptionMethod | Format-Table -AutoSize
-    Get-Tpm | Select-Object TpmPresent,TpmReady,TpmEnabled,ManufacturerVersion | Format-List
-    "SecureBoot enabled: " + (Confirm-SecureBootUEFI)
-    Get-MpComputerStatus | Select-Object AMServiceEnabled,RealTimeProtectionEnabled,AntivirusSignatureLastUpdated | Format-List
-
-    Say "  [7/12] Battery and power..." 'DarkGray'
-    "=== BATTERY / POWER ==="
-    Get-CimInstance Win32_Battery | Select-Object Name,EstimatedChargeRemaining,BatteryStatus,DesignVoltage | Format-List
-    powercfg /getactivescheme
-    "=== BATTERY HEALTH ==="
-    $xmlPath = Join-Path $env:TEMP "battery_$Stamp.xml"
-    powercfg /batteryreport /xml /output $xmlPath | Out-Null
-    if (Test-Path $xmlPath) {
-        [xml]$br = Get-Content $xmlPath -Raw
-        Remove-Item $xmlPath -Force
-        foreach ($b in @($br.BatteryReport.Batteries.Battery)) {
-            $design = [double]$b.DesignCapacity
-            $full   = [double]$b.FullChargeCapacity
-            [pscustomobject]@{
-                Battery            = $b.Id
-                Manufacturer       = $b.Manufacturer
-                Chemistry          = $b.Chemistry
-                DesignCapacity_mWh = $design
-                FullCharge_mWh     = $full
-                HealthPercent      = if ($design -gt 0) { [math]::Round($full / $design * 100, 1) } else { 'n/a' }
-                CycleCount         = $b.CycleCount
-            } | Format-List
-        }
-        $est = $br.BatteryReport.RuntimeEstimates
-        if ($est) {
-            "Estimated runtime at full charge:   " + $est.FullChargeCapacity.ActiveRuntime
-            "Estimated runtime at design charge: " + $est.DesignCapacity.ActiveRuntime
-        }
-        "--- Capacity history (last 10 periods) ---"
-        @($br.BatteryReport.History.HistoryEntry) | Select-Object -Last 10 |
-            Select-Object StartDate,EndDate,@{n='FullCharge_mWh';e={$_.FullChargeCapacity}},@{n='Design_mWh';e={$_.DesignCapacity}},CycleCount |
-            Format-Table -AutoSize
-    } else {
-        "No battery detected."
+$LaptopSections = @(
+'SYSTEM MAP', {
+    $cs = Get-CimInstance Win32_ComputerSystem
+    $os = Get-CimInstance Win32_OperatingSystem
+    $nt = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+    "$env:COMPUTERNAME  $($cs.Manufacturer) $ModelName  $($os.Caption) $($nt.DisplayVersion) build $($os.BuildNumber).$($nt.UBR)"
+    $rows = New-Object System.Collections.Generic.List[string]
+    foreach ($c in @(Get-CimInstance Win32_Processor)) {
+        $rows.Add(('cpu      {0}  {1}c/{2}t' -f (Short $c.Name 60), $c.NumberOfCores, $c.NumberOfLogicalProcessors))
     }
+    $mem = @(Get-CimInstance Win32_PhysicalMemory)
+    $slots = (@(Get-CimInstance Win32_PhysicalMemoryArray) | Measure-Object MemoryDevices -Sum).Sum
+    $rows.Add(('memory   {0}G  {1} of {2} slots  {3} MT/s' -f [math]::Round(($mem | Measure-Object Capacity -Sum).Sum / 1GB), $mem.Count, $slots, $mem[0].ConfiguredClockSpeed))
+    foreach ($g in @(Get-CimInstance Win32_VideoController)) {
+        $res = if ($g.CurrentHorizontalResolution) { "$($g.CurrentHorizontalResolution)x$($g.CurrentVerticalResolution) @ $($g.CurrentRefreshRate)Hz" } else { 'no display' }
+        $rows.Add(('gpu      {0}  {1}' -f $g.Name, $res))
+    }
+    foreach ($d in @(Get-PhysicalDisk | Sort-Object DeviceId)) {
+        $rows.Add(('disk     {0}  {1} {2}  {3}G  {4}' -f $d.FriendlyName, $d.BusType, $d.MediaType, [math]::Round($d.Size / 1GB), $d.HealthStatus))
+    }
+    foreach ($v in Get-FixedVolumes) {
+        $u = $v.Size - $v.SizeRemaining
+        $rows.Add(('volume   {0}:  {1}  {2:n0}G/{3:n0}G ({4:n0}%)' -f $v.DriveLetter, $v.FileSystem, ($u / 1GB), ($v.Size / 1GB), ($u / $v.Size * 100)))
+    }
+    foreach ($n in @(Get-NetAdapter -Physical | Where-Object Status -eq 'Up')) {
+        $ip = (@(Get-NetIPAddress -InterfaceIndex $n.ifIndex -AddressFamily IPv4) | Select-Object -First 1).IPAddress
+        $rows.Add(('network  {0}  {1}  {2}' -f $n.Name, $n.LinkSpeed, $(if ($ip) { $ip } else { '-' })))
+    }
+    foreach ($b in @(Get-Battery)) { $rows.Add(('battery  {0}% of design capacity  {1} cycles' -f $b.HealthPct, $b.Cycles)) }
+    $tpm = Get-Tpm
+    $bl = (Get-BitLockerVolume -MountPoint $env:SystemDrive).ProtectionStatus
+    $rows.Add(('security BitLocker {0} {1}  Secure Boot {2}  TPM {3}' -f $env:SystemDrive, $(if ($bl) { "$bl".ToLower() } else { 'n/a' }), (Get-SecureBoot),
+        $(if ($tpm.TpmReady) { 'ready' } elseif ($tpm.TpmPresent) { 'not ready' } else { 'none' })))
+    Tree $rows
+},
+'HEALTH SUMMARY', {
+    $os = Get-CimInstance Win32_OperatingSystem
+    $cs = Get-CimInstance Win32_ComputerSystem
+    $bios = Get-CimInstance Win32_BIOS
+    $nt = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+    $up = (Get-Date) - $os.LastBootUpTime
+    $last = Get-LastUpdate
+    '---- At a glance ----'
+    Row 'Windows:' "$($os.Caption) $($nt.DisplayVersion) build $($os.BuildNumber).$($nt.UBR)"
+    Row 'Model:' "$($cs.Manufacturer) $ModelName"
+    Row 'BIOS:' ('{0} ({1:yyyy-MM-dd})' -f $bios.SMBIOSBIOSVersion, $bios.ReleaseDate)
+    Row 'Uptime:' ('{0}d {1}h (since {2:yyyy-MM-dd HH:mm})' -f $up.Days, $up.Hours, $os.LastBootUpTime)
+    Row 'Memory free/total:' ('{0:n1}G/{1:n1}G' -f ($os.FreePhysicalMemory / 1MB), ($os.TotalVisibleMemorySize / 1MB))
+    Row 'Last update:' $(if ($last) { '{0} on {1:yyyy-MM-dd}' -f $last.HotFixID, $last.InstalledOn } else { '(unknown)' })
 
-    Say "  [8/12] Network..." 'DarkGray'
-    "=== NETWORK ADAPTERS ==="
-    Get-NetAdapter | Select-Object Name,InterfaceDescription,Status,LinkSpeed,MacAddress,DriverVersion | Format-Table -AutoSize
-    "=== IP CONFIGURATION ==="
-    Get-NetIPConfiguration | Format-List
+    $issues = New-Object System.Collections.Generic.List[string]
+    # Code 22 is a device disabled on purpose
+    $bad = @(Get-ProblemDevices | Where-Object ConfigManagerErrorCode -ne 22)
+    if ($bad.Count) { $issues.Add("$($bad.Count) device(s) with a driver problem - see DEVICES") }
+    foreach ($v in Get-FixedVolumes) {
+        $p = [math]::Round(($v.Size - $v.SizeRemaining) / $v.Size * 100)
+        if ($p -ge 85) { $issues.Add("Drive $($v.DriveLetter): at $p% - see DISKS") }
+    }
+    foreach ($d in @(Get-PhysicalDisk)) {
+        if ($d.HealthStatus -and "$($d.HealthStatus)" -ne 'Healthy') { $issues.Add("Disk $($d.FriendlyName): $($d.HealthStatus) - see DISKS") }
+        $r = $d | Get-StorageReliabilityCounter
+        if ($r.Wear -ge 80) { $issues.Add("Disk $($d.FriendlyName): $($r.Wear)% worn - see DISKS") }
+        if ($r.ReadErrorsUncorrected -gt 0) { $issues.Add("Disk $($d.FriendlyName): $($r.ReadErrorsUncorrected) uncorrected read errors - see DISKS") }
+    }
+    foreach ($b in @(Get-Battery)) {
+        if ($b.HealthPct -and $b.HealthPct -lt 80) { $issues.Add("Battery at $($b.HealthPct)% of design capacity ($($b.Cycles) cycles) - see BATTERY & POWER") }
+    }
+    $pend = Get-PendingReboot
+    if ($pend) { $issues.Add("Restart pending ($pend)") }
+    if ($last -and $last.InstalledOn -lt (Get-Date).AddDays(-60)) { $issues.Add("No update installed for $(((Get-Date) - $last.InstalledOn).Days) days - see UPDATES") }
+    if ((Get-SecureBoot) -eq 'off') { $issues.Add('Secure Boot off - see SECURITY') }
+    $tpm = Get-Tpm
+    if ($tpm -and -not $tpm.TpmReady) { $issues.Add($(if ($tpm.TpmPresent) { 'TPM present but not ready - see SECURITY' } else { 'No TPM found - see SECURITY' })) }
+    $bl = Get-BitLockerVolume -MountPoint $env:SystemDrive
+    if ($bl -and "$($bl.ProtectionStatus)" -ne 'On') { $issues.Add("BitLocker protection off on $env:SystemDrive - see SECURITY") }
+    $mp = Get-MpComputerStatus
+    if ($mp -and $mp.AMRunningMode -eq 'Normal') {
+        if (-not $mp.RealTimeProtectionEnabled) { $issues.Add('Defender real-time protection off - see SECURITY') }
+        $age = ((Get-Date) - $mp.AntivirusSignatureLastUpdated).Days
+        if ($age -gt 7) { $issues.Add("Defender signatures $age days old - see SECURITY") }
+    }
+    $k41 = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-Kernel-Power'; Id = 41; StartTime = (Get-Date).AddDays(-30) }).Count
+    if ($k41) { $issues.Add("$k41 unexpected shutdown(s) in 30 days - see LOGS") }
+    $bsod = @(Get-ChildItem -LiteralPath "$env:windir\Minidump" -File | Where-Object LastWriteTime -gt (Get-Date).AddDays(-30)).Count
+    if ($bsod) { $issues.Add("$bsod blue screen(s) in 30 days - see LOGS") }
 
-    Say "  [9/12] Devices with problems..." 'DarkGray'
-    "=== PROBLEM DEVICES ==="
-    $bad = Get-PnpDevice | Where-Object { $_.Status -ne 'OK' -and $_.Present }
-    if ($bad) { $bad | Select-Object FriendlyName,Status,Class,InstanceId | Format-Table -AutoSize }
-    else { "None - all devices reporting OK." }
+    ''
+    '---- Checks ----'
+    if ($issues.Count) { $issues | ForEach-Object { "!! $_" } } else { 'No issues detected by the automated checks.' }
+},
+'WINDOWS / BIOS', {
+    $os = Get-CimInstance Win32_OperatingSystem
+    $cs = Get-CimInstance Win32_ComputerSystem
+    $bios = Get-CimInstance Win32_BIOS
+    $nt = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+    $fast = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power').HiberbootEnabled
+    [pscustomobject]@{
+        Edition      = $nt.EditionID
+        Version      = "$($os.Caption) $($nt.DisplayVersion) build $($os.BuildNumber).$($nt.UBR)"
+        Architecture = $os.OSArchitecture
+        Installed    = '{0:yyyy-MM-dd}' -f $os.InstallDate
+        LastBoot     = '{0:yyyy-MM-dd HH:mm}' -f $os.LastBootUpTime
+        FastStartup  = if ($fast -eq 1) { 'on (Shut down does not reset uptime)' } else { 'off' }
+        TimeZone     = (Get-TimeZone).Id
+        Manufacturer = $cs.Manufacturer
+        Model        = "$($cs.Model) ($ModelName)"
+        SystemType   = $cs.SystemType
+        Hypervisor   = $cs.HypervisorPresent
+        BIOS         = '{0} {1} ({2:yyyy-MM-dd})' -f $bios.Manufacturer, $bios.SMBIOSBIOSVersion, $bios.ReleaseDate
+        BootMode     = if (Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot\State') { 'UEFI' } else { 'Legacy BIOS' }
+        Serial       = $bios.SerialNumber
+    } | Format-List
+},
+'CPU', {
+    Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed,
+        @{ n = 'L2CacheMB'; e = { [math]::Round($_.L2CacheSize / 1KB, 1) } }, @{ n = 'L3CacheMB'; e = { [math]::Round($_.L3CacheSize / 1KB, 1) } },
+        VirtualizationFirmwareEnabled, LoadPercentage | Format-List
+},
+'MEMORY', {
+    $mem = @(Get-CimInstance Win32_PhysicalMemory)
+    $mem | Select-Object @{ n = 'Slot'; e = { $_.DeviceLocator } }, @{ n = 'GB'; e = { [math]::Round($_.Capacity / 1GB) } }, Speed, ConfiguredClockSpeed,
+        Manufacturer, @{ n = 'PartNumber'; e = { "$($_.PartNumber)".Trim() } } | Format-Table -AutoSize
+    $os = Get-CimInstance Win32_OperatingSystem
+    Row 'Slots used:' ('{0} of {1}' -f $mem.Count, (@(Get-CimInstance Win32_PhysicalMemoryArray) | Measure-Object MemoryDevices -Sum).Sum)
+    Row 'Free/total:' ('{0:n1}G/{1:n1}G' -f ($os.FreePhysicalMemory / 1MB), ($os.TotalVisibleMemorySize / 1MB))
+    Row 'Page file:' (OrNone ((Get-CimInstance Win32_PageFileUsage | ForEach-Object { "$($_.Name) $($_.AllocatedBaseSize)M, peak $($_.PeakUsage)M" }) -join '; '))
+},
+'GRAPHICS', {
+    Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, @{ n = 'DriverDate'; e = { '{0:yyyy-MM-dd}' -f $_.DriverDate } },
+        @{ n = 'Resolution'; e = { if ($_.CurrentHorizontalResolution) { "$($_.CurrentHorizontalResolution)x$($_.CurrentVerticalResolution) @ $($_.CurrentRefreshRate)Hz" } } } | Format-List
+    '---- Monitors ----'
+    OrNone (Get-CimInstance -Namespace root\wmi WmiMonitorID | ForEach-Object { '{0} {1}' -f (Chars $_.ManufacturerName), (Chars $_.UserFriendlyName) })
+},
+'DISKS', {
+    Get-PhysicalDisk | Sort-Object DeviceId | Select-Object DeviceId, FriendlyName, MediaType, BusType, @{ n = 'SizeGB'; e = { [math]::Round($_.Size / 1GB) } },
+        HealthStatus, FirmwareVersion, SerialNumber | Format-Table -AutoSize
+    '---- Reliability (blank = not reported by the disk) ----'
+    OrNone (@(Get-PhysicalDisk | Sort-Object DeviceId) | ForEach-Object {
+        $r = $_ | Get-StorageReliabilityCounter
+        [pscustomobject]@{ Disk = $_.FriendlyName; TempC = $r.Temperature; WearPct = $r.Wear; PowerOnHours = $r.PowerOnHours
+            ReadErrors = $r.ReadErrorsUncorrected; WriteErrors = $r.WriteErrorsUncorrected }
+    } | Format-Table -AutoSize)
+    Sub 'Volumes'
+    Get-Volume | Where-Object DriveLetter | Sort-Object DriveLetter | Select-Object DriveLetter, FileSystemLabel, FileSystem, DriveType,
+        @{ n = 'SizeGB'; e = { [math]::Round($_.Size / 1GB, 1) } }, @{ n = 'FreeGB'; e = { [math]::Round($_.SizeRemaining / 1GB, 1) } },
+        @{ n = 'UsedPct'; e = { if ($_.Size) { [math]::Round(($_.Size - $_.SizeRemaining) / $_.Size * 100) } } }, HealthStatus | Format-Table -AutoSize
+},
+'SECURITY', {
+    '---- BitLocker ----'
+    OrNone (Get-BitLockerVolume | Select-Object MountPoint, VolumeStatus, ProtectionStatus, EncryptionMethod, EncryptionPercentage | Format-Table -AutoSize) '(not available on this edition)'
+    Sub 'TPM'
+    OrNone (Get-Tpm | Select-Object TpmPresent, TpmReady, TpmEnabled, ManufacturerIdTxt, ManufacturerVersion | Format-List) '(unavailable)'
+    Sub 'Secure Boot'
+    Get-SecureBoot
+    Sub 'Antivirus registered'
+    OrNone ((Get-CimInstance -Namespace root/SecurityCenter2 AntiVirusProduct).displayName -join ', ')
+    Sub 'Microsoft Defender'
+    OrNone (Get-MpComputerStatus | Select-Object AMRunningMode, RealTimeProtectionEnabled, AntivirusSignatureLastUpdated, QuickScanEndTime, FullScanEndTime | Format-List) '(unavailable)'
+    Sub 'Firewall profiles'
+    OrNone (Get-NetFirewallProfile | Select-Object Name, Enabled, DefaultInboundAction | Format-Table -AutoSize)
+    Sub 'UAC'
+    $uac = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+    if ($uac.EnableLUA -eq 0) { 'off' } else { "on (ConsentPromptBehaviorAdmin=$($uac.ConsentPromptBehaviorAdmin))" }
+},
+'BATTERY & POWER', {
+    $bats = @(Get-Battery)
+    if ($bats.Count) {
+        $bats | Format-List
+        $est = $BatXml.BatteryReport.RuntimeEstimates
+        if ($est) {
+            Row 'Runtime at full charge:' $est.FullChargeCapacity.ActiveRuntime
+            Row 'Runtime at design charge:' $est.DesignCapacity.ActiveRuntime
+        }
+        Sub 'Capacity history (last 10 periods)'
+        @($BatXml.BatteryReport.History.HistoryEntry) | Select-Object -Last 10 | Select-Object StartDate, EndDate,
+            @{ n = 'FullCharge_mWh'; e = { $_.FullChargeCapacity } }, @{ n = 'Design_mWh'; e = { $_.DesignCapacity } }, CycleCount | Format-Table -AutoSize
+    } else {
+        'No battery detected.'
+    }
+    Sub 'Power plan'
+    powercfg /getactivescheme
+    Sub 'Sleep states'
+    powercfg /a
+},
+'NETWORK', {
+    '---- Adapters ----'
+    Get-NetAdapter | Sort-Object Status, Name | Select-Object Name, InterfaceDescription, Status, LinkSpeed, DriverVersion | Format-Table -AutoSize
+    Sub 'MAC addresses'
+    Get-NetAdapter | Sort-Object Name | ForEach-Object { '{0,-30} {1}' -f $_.Name, $_.MacAddress }
+    Sub 'IP configuration'
+    OrNone (Get-NetIPConfiguration | Where-Object IPv4Address | ForEach-Object {
+        [pscustomobject]@{ Interface = $_.InterfaceAlias; IPv4 = ($_.IPv4Address.IPAddress -join ', '); Gateway = ($_.IPv4DefaultGateway.NextHop -join ', ')
+            DNS = (@($_.DNSServer | Where-Object AddressFamily -eq 2).ServerAddresses -join ', ') }
+    } | Format-Table -AutoSize)
+    Sub 'Wi-Fi'
+    OrNone (netsh wlan show interfaces | Where-Object { $_ -match '^\s+(Name|Description|State|SSID|Radio type|Band|Channel|Receive rate.*|Transmit rate.*|Signal)\s*:' } |
+        ForEach-Object { $_.Trim() }) '(no Wi-Fi adapter)'
+},
+'DEVICES', {
+    $bad = @(Get-ProblemDevices)
+    if ($bad.Count) {
+        $bad | Select-Object Name, PNPClass, @{ n = 'Problem'; e = { $c = [int]$_.ConfigManagerErrorCode; "$c $($DevCodes[$c])" } }, DeviceID | Format-Table -AutoSize
+    } else {
+        'All devices report OK.'
+    }
+},
+'DRIVERS (THIRD-PARTY, NEWEST 40)', {
+    Get-CimInstance Win32_PnPSignedDriver | Where-Object { $_.DeviceName -and $_.DriverProviderName -and $_.DriverProviderName -ne 'Microsoft' } |
+        Sort-Object DeviceName, DriverVersion -Unique | Sort-Object DriverDate -Descending | Select-Object -First 40 DeviceName, DriverVersion,
+        @{ n = 'Date'; e = { '{0:yyyy-MM-dd}' -f $_.DriverDate } }, DriverProviderName | Format-Table -AutoSize
+},
+'SOFTWARE', {
+    $apps = @(Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+            'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' |
+        Where-Object { $_.DisplayName -and $_.SystemComponent -ne 1 -and -not $_.ParentKeyName -and $_.ReleaseType -notmatch 'Update|Hotfix' } |
+        Sort-Object DisplayName -Unique)
+    "---- Installed apps ($($apps.Count)) ----"
+    $apps | Select-Object DisplayName, DisplayVersion, Publisher | Format-Table -AutoSize
+    Sub 'Startup items'
+    OrNone (Get-CimInstance Win32_StartupCommand | Select-Object Name, Command, Location | Format-Table -AutoSize)
+    Sub 'Optional features enabled beyond the defaults'
+    # Enabled out of the box on Windows 10/11
+    $defaults = 'MicrosoftWindowsPowerShellV2Root', 'MicrosoftWindowsPowerShellV2', 'Printing-PrintToPDFServices-Features', 'Printing-XPSServices-Features',
+        'Printing-Foundation-Features', 'Printing-Foundation-InternetPrinting-Client', 'SearchEngine-Client-Package', 'MSRDC-Infrastructure',
+        'WorkFolders-Client', 'MediaPlayback', 'WindowsMediaPlayer', 'Windows-Defender-Default-Definitions', 'SmbDirect', 'NetFx4-AdvSrvs',
+        'WCF-Services45', 'WCF-TCP-PortSharing45', 'Internet-Explorer-Optional-amd64', 'Microsoft-RemoteDesktopConnection', 'Microsoft-SnippingTool', 'Recall'
+    OrNone (Get-WindowsOptionalFeature -Online | Where-Object { $_.State -eq 'Enabled' -and $_.FeatureName -notin $defaults } | ForEach-Object FeatureName | Sort-Object)
+},
+'UPDATES', {
+    '---- Recent updates (last 10) ----'
+    OrNone (Get-HotFix | Where-Object InstalledOn | Sort-Object InstalledOn -Descending | Select-Object -First 10 HotFixID, Description,
+        @{ n = 'InstalledOn'; e = { '{0:yyyy-MM-dd}' -f $_.InstalledOn } } | Format-Table -AutoSize)
+    Sub 'Restart pending'
+    $p = Get-PendingReboot
+    if ($p) { "Yes ($p)" } else { 'No' }
+},
+'SERVICES', {
+    '---- Automatic services not running (trigger-start and delayed ones left out) ----'
+    OrNone (Get-CimInstance Win32_Service -Filter "StartMode='Auto' AND State<>'Running'" |
+        Where-Object { -not $_.DelayedAutoStart -and -not (Test-Path -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\$($_.Name)\TriggerInfo") } |
+        Select-Object Name, DisplayName, State, ExitCode | Format-Table -AutoSize)
+},
+'LOGS', {
+    # Errors repeat; collapse them by message, then show the newest verbatim
+    $since = (Get-Date).AddDays(-7)
+    $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; Level = 1, 2; StartTime = $since } -MaxEvents 1000)
+    '---- System errors, last 7 days (count x message, numbers normalised) ----'
+    OrNone ($ev | Group-Object { Norm "$($_.ProviderName) $($_.Id): $(Short (($_.Message -split '\r?\n')[0]) 140)" } | Sort-Object Count -Descending |
+        Select-Object -First 20 | ForEach-Object { '{0,5} x {1}' -f $_.Count, $_.Name }) '(no errors logged)'
+    Sub 'Most recent errors (last 10, verbatim)'
+    OrNone ($ev | Select-Object -First 10 | ForEach-Object { '{0:yyyy-MM-dd HH:mm}  {1} {2}: {3}' -f $_.TimeCreated, $_.ProviderName, $_.Id, (Short $_.Message 200) })
+    Sub 'App crashes and hangs, last 7 days (count x app)'
+    OrNone (Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Application Error', 'Application Hang'; StartTime = $since } |
+        Group-Object { '{0} {1}' -f $(if ($_.ProviderName -eq 'Application Hang') { 'hang ' } else { 'crash' }), $_.Properties[0].Value } |
+        Sort-Object Count -Descending | Select-Object -First 15 | ForEach-Object { '{0,5} x {1}' -f $_.Count, $_.Name })
+    Sub 'Unexpected shutdowns and blue screens, last 30 days'
+    OrNone (Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = 41, 6008, 1001; StartTime = (Get-Date).AddDays(-30) } |
+        Where-Object { $_.Id -ne 1001 -or $_.ProviderName -match 'WER-SystemErrorReporting' } | Select-Object -First 15 |
+        ForEach-Object { '{0:yyyy-MM-dd HH:mm}  {1} {2}: {3}' -f $_.TimeCreated, $_.ProviderName, $_.Id, (Short $_.Message 160) })
+    $md = @(Get-ChildItem -LiteralPath "$env:windir\Minidump" -File | Sort-Object LastWriteTime -Descending)
+    Row 'Minidumps:' $(if ($md.Count) { '{0}, newest {1:yyyy-MM-dd HH:mm}' -f $md.Count, $md[0].LastWriteTime } else { 'none' })
+}
+)
 
-    Say "  [10/12] Drivers..." 'DarkGray'
-    "=== NEWEST 40 DRIVERS ==="
-    Get-CimInstance Win32_PnPSignedDriver | Where-Object DeviceName | Sort-Object DriverDate -Descending | Select-Object DeviceName,DriverVersion,DriverDate,DriverProviderName -First 40 | Format-Table -AutoSize
-
-    Say "  [11/12] Installed software and startup..." 'DarkGray'
-    "=== INSTALLED APPS ==="
-    Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' | Where-Object DisplayName | Select-Object DisplayName,DisplayVersion,Publisher | Sort-Object DisplayName -Unique | Format-Table -AutoSize
-    "=== STARTUP ITEMS ==="
-    Get-CimInstance Win32_StartupCommand | Select-Object Name,Command,Location | Format-Table -AutoSize
-    "=== WINDOWS FEATURES ENABLED ==="
-    Get-WindowsOptionalFeature -Online | Where-Object State -eq 'Enabled' | Select-Object FeatureName | Format-Table -AutoSize
-
-    Say "  [12/12] Updates and recent errors..." 'DarkGray'
-    "=== RECENT UPDATES ==="
-    Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object HotFixID,Description,InstalledOn -First 20 | Format-Table -AutoSize
-    "=== SYSTEM ERRORS (LAST 7 DAYS) ==="
-    Get-WinEvent -FilterHashtable @{LogName='System';Level=1,2;StartTime=(Get-Date).AddDays(-7)} -MaxEvents 25 | Select-Object TimeCreated,Id,ProviderName,Message | Format-List
-    "=== UNEXPECTED SHUTDOWNS ==="
-    Get-WinEvent -FilterHashtable @{LogName='System';Id=41,6008} -MaxEvents 10 | Select-Object TimeCreated,Id,Message | Format-List
-
-    Stop-Transcript | Out-Null
-    Finish-Report -Path $out -Label 'Laptop report'
+function Get-LaptopReport {
+    $name = Get-LaptopModelName
+    Write-Report (Join-Path $OutDir "Data System $(ConvertTo-OneWord $name) $Stamp.txt") 'WINDOWS' "Computer: $env:COMPUTERNAME" `
+        'Takes 1-2 minutes.' @{ ModelName = $name } $LaptopSections
 }
 
 # =====================================================================
@@ -279,6 +611,7 @@ function Ensure-Adb {
     return $false
 }
 
+# Returns the serial of the first authorised phone, or nothing on timeout
 function Wait-ForPhone {
     Say ""
     Say "  ON YOUR PHONE, do this first:" 'Cyan'
@@ -294,9 +627,10 @@ function Wait-ForPhone {
     adb start-server | Out-Null
     $warned = $false
     for ($i = 0; $i -lt 120; $i++) {
-        $list = (adb devices) -split "`n" | Where-Object { $_ -match "`t" }
-        if ($list -match "`tdevice$") { Say "  Phone connected and authorised." 'Green'; return $true }
-        if ($list -match "`tunauthorized" -and -not $warned) {
+        $list = @((adb devices) -split "`n" | Where-Object { $_ -match "`t" } | ForEach-Object { $_.Trim() })
+        $ready = @($list | Where-Object { $_ -match "`tdevice$" })
+        if ($ready.Count) { Say "  Phone connected and authorised." 'Green'; return ($ready[0] -split "`t")[0] }
+        if (($list -match "`tunauthorized") -and -not $warned) {
             Say "  Phone seen, but not authorised yet." 'Yellow'
             Say "  Unlock the screen and tap ALLOW (tick 'Always allow')." 'Yellow'
             $warned = $true
@@ -307,80 +641,143 @@ function Wait-ForPhone {
     Say "  Timed out waiting for the phone." 'Red'
     Say "  Try a different USB cable or port. On the phone, Developer options >" 'Red'
     Say "  'Revoke USB debugging authorisations', then run this again." 'Red'
-    return $false
 }
 
+$PhoneSections = @(
+'SYSTEM MAP', {
+    $p = Get-Props
+    $b = Get-PhoneBattery
+    $cap = Get-PhoneCapacity
+    $d = Get-DataUse
+    $memKb = if ("$(A shell cat /proc/meminfo)" -match 'MemTotal:\s+(\d+)') { [double]$matches[1] } else { 0 }
+    $soc = "$($p['ro.soc.manufacturer']) $($p['ro.soc.model'])".Trim()
+    if (-not $soc) { $soc = $p['ro.board.platform'] }
+    $ip = if ("$(A shell ip -4 -o addr show wlan0)" -match 'inet ([\d.]+)') { $matches[1] } else { '-' }
+    '{0} {1} ({2})  Android {3} (SDK {4})  patch {5}' -f $p['ro.product.manufacturer'], $p['ro.product.model'], $p['ro.product.device'],
+        $p['ro.build.version.release'], $p['ro.build.version.sdk'], $p['ro.build.version.security_patch']
+    Tree @(
+        ('cpu      {0}  {1} cores' -f $soc, "$(A shell nproc)".Trim())
+        ('memory   {0:n1}G' -f ($memKb / 1MB))
+        $(if ($d) { 'storage  /data  {0}G/{1}G ({2}%)' -f $d.UsedGB, $d.TotalGB, $d.Pct } else { 'storage  /data  -' })
+        ('battery  {0}%  {1}  health {2}  {3:n1}C{4}' -f $b['level'], $BatStatus[$b['status']], $BatHealth[$b['health']], ([double]$b['temperature'] / 10),
+            $(if ($cap['pct']) { "  $($cap['pct'])% of design capacity" }))
+        ('display  {0}  {1}' -f (@(A shell wm size)[0] -replace '.*:\s*', ''), (@(A shell wm density)[0] -replace '.*:\s*', ''))
+        ('network  wlan0  {0}  {1} {2}' -f $ip, $p['gsm.operator.alpha'], $p['gsm.network.type'])
+        ('apps     {0} user-installed, {1} disabled' -f @(A shell pm list packages -3).Count, @(A shell pm list packages -d).Count)
+    )
+},
+'HEALTH SUMMARY', {
+    $p = Get-Props
+    $b = Get-PhoneBattery
+    $cap = Get-PhoneCapacity
+    $d = Get-DataUse
+    $upS = [double](("$(A shell cat /proc/uptime)" -split ' ')[0])
+    '---- At a glance ----'
+    Row 'Model:' "$($p['ro.product.manufacturer']) $($p['ro.product.model'])"
+    Row 'Android:' "$($p['ro.build.version.release']) (SDK $($p['ro.build.version.sdk'])), build $($p['ro.build.display.id'])"
+    Row 'Security patch:' $p['ro.build.version.security_patch']
+    Row 'Uptime:' ('{0}d {1}h' -f [math]::Floor($upS / 86400), [math]::Floor(($upS % 86400) / 3600))
+    Row 'Battery:' "$($b['level'])%, $($BatStatus[$b['status']])"
+
+    $issues = New-Object System.Collections.Generic.List[string]
+    $patch = [datetime]::MinValue
+    if ([datetime]::TryParseExact("$($p['ro.build.version.security_patch'])", 'yyyy-MM-dd', $null, 'None', [ref]$patch)) {
+        $age = ((Get-Date) - $patch).Days
+        if ($age -gt 90) { $issues.Add("Security patch is $age days old - check for a system update") }
+    }
+    if ($b['health'] -and $b['health'] -ne '2') { $issues.Add("Battery health: $($BatHealth[$b['health']]) - see BATTERY") }
+    if ($cap['pct'] -and $cap['pct'] -lt 80) { $issues.Add("Battery at $($cap['pct'])% of design capacity - see BATTERY") }
+    if ([double]$b['temperature'] -ge 450) { $issues.Add(('Battery at {0:n1}C - see BATTERY' -f ([double]$b['temperature'] / 10))) }
+    if ($d -and $d.Pct -ge 85) { $issues.Add("Storage at $($d.Pct)% - see STORAGE") }
+    $cr = @(Get-CrashApps (Get-Crashes))
+    if ($cr.Count) { $issues.Add("$($cr.Count) app crash(es) logged - see CRASHES") }
+
+    ''
+    '---- Checks ----'
+    if ($issues.Count) { $issues | ForEach-Object { "!! $_" } } else { 'No issues detected by the automated checks.' }
+},
+'DEVICE', {
+    $p = Get-Props
+    foreach ($k in 'ro.product.manufacturer', 'ro.product.brand', 'ro.product.model', 'ro.product.device', 'ro.product.name',
+            'ro.build.version.release', 'ro.build.version.sdk', 'ro.build.version.security_patch', 'ro.build.display.id', 'ro.build.fingerprint',
+            'ro.build.date', 'ro.bootloader', 'gsm.version.baseband', 'ro.board.platform', 'ro.soc.manufacturer', 'ro.soc.model', 'ro.hardware',
+            'ro.product.cpu.abi', 'ro.boot.verifiedbootstate', 'ro.boot.flash.locked', 'ro.crypto.state', 'ro.crypto.type', 'persist.sys.timezone') {
+        if ($p[$k]) { '{0,-34} {1}' -f $k, $p[$k] }
+    }
+},
+'CPU', {
+    OrNone (@(A shell cat /proc/cpuinfo) | Where-Object { $_ -cmatch '^(Hardware|model name|Processor)\s*:' } | Sort-Object -Unique)
+    Sub 'Cores by max clock'
+    OrNone (@(A shell 'cat /sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_max_freq') | Where-Object { $_ -match '^\d+$' } | Group-Object |
+        Sort-Object { [int]$_.Name } | ForEach-Object { '{0} x {1:n2} GHz' -f $_.Count, ([double]$_.Name / 1e6) })
+},
+'MEMORY', {
+    OrNone (@(A shell cat /proc/meminfo) | Where-Object { $_ -match '^(MemTotal|MemAvailable|SwapTotal|SwapFree):' })
+    Sub 'Summary'
+    OrNone (@(A shell dumpsys meminfo) | Where-Object { $_ -match '^\s*(Total RAM|Free RAM|Used RAM|Lost RAM|ZRAM):' } | ForEach-Object { $_.Trim() })
+},
+'STORAGE', {
+    OrNone (@(A shell df -h) | Where-Object { $_ -match '^Filesystem' -or $_ -match '\s(/|/data|/system|/vendor|/product|/metadata|/storage/emulated)$' } | Select-Object -Unique)
+},
+'BATTERY', {
+    OrNone (@(A shell dumpsys battery) | Where-Object { $_.Trim() })
+    Sub 'Capacity (blank = not exposed by the phone)'
+    $cap = Get-PhoneCapacity
+    Row 'Cycle count:' $cap['cycle_count']
+    Row 'Full charge (uAh):' $cap['charge_full']
+    Row 'Design (uAh):' $cap['charge_full_design']
+    Row 'Health:' $(if ($cap['pct']) { "$($cap['pct'])% of design capacity" })
+},
+'DISPLAY', {
+    A shell wm size
+    A shell wm density
+    Row 'Screen timeout:' ('{0}s' -f ([double]"$(A shell settings get system screen_off_timeout)" / 1000))
+    Row 'Peak refresh rate:' "$(A shell settings get system peak_refresh_rate)"
+    Row 'Brightness:' $(if ("$(A shell settings get system screen_brightness_mode)" -eq '1') { 'auto' } else { 'manual' })
+},
+'NETWORK', {
+    $p = Get-Props
+    '---- Interfaces (up) ----'
+    OrNone (@(A shell ip -br a) | Where-Object { $_ -notmatch '^(lo|dummy|sit|ip6tnl|ip_vti|ip6_vti|ip6gre|gre|tunl|erspan)' -and $_ -match '\s(UP|UNKNOWN)\s' })
+    Sub 'Wi-Fi'
+    OrNone (@(A shell dumpsys wifi) | Where-Object { $_ -match 'mWifiInfo' } | Select-Object -First 1 |
+        ForEach-Object { Short ($_ -replace '.*mWifiInfo\s*', '' -replace '(BSSID|MAC): [0-9a-fA-F:]{17},\s*', '') 400 })
+    Sub 'Mobile'
+    Row 'Operator:' $p['gsm.operator.alpha']
+    Row 'Network type:' $p['gsm.network.type']
+},
+'APPS', {
+    $u = @(A shell pm list packages -3 | ForEach-Object { $_ -replace '^package:', '' } | Sort-Object)
+    $d = @(A shell pm list packages -d | ForEach-Object { $_ -replace '^package:', '' } | Sort-Object)
+    Row 'Total packages:' @(A shell pm list packages).Count
+    Sub "User-installed ($($u.Count))"
+    OrNone $u
+    Sub "Disabled ($($d.Count))"
+    OrNone $d
+},
+'POWER', {
+    Row 'Battery saver:' $(if ("$(A shell settings get global low_power)" -eq '1') { 'on' } else { 'off' })
+    OrNone (@(A shell dumpsys deviceidle) | Where-Object { $_ -match '^\s+(mDeepEnabled|mLightEnabled|mState|mLightState)=' } | ForEach-Object { $_.Trim() })
+    Sub 'Apps exempt from battery optimisation'
+    OrNone (@(A shell dumpsys deviceidle whitelist) | Where-Object { $_ -match '^user,' } | ForEach-Object { ($_ -split ',')[1] } | Sort-Object)
+},
+'CRASHES', {
+    $c = Get-Crashes
+    '---- Crashed apps (count x app) ----'
+    OrNone (Get-CrashApps $c | Group-Object | Sort-Object Count -Descending | ForEach-Object { '{0,5} x {1}' -f $_.Count, $_.Name }) '(no crashes logged)'
+    Sub 'Most recent crash lines (last 30, verbatim)'
+    OrNone ($c | Where-Object { $_ -and $_ -notmatch '^-+ beginning of' } | Select-Object -Last 30)
+}
+)
+
 function Get-PhoneReport {
-    if (-not (Ensure-Adb))    { return }
-    if (-not (Wait-ForPhone)) { return }
-
-    $out = Join-Path $OutDir "Data Phone $(ConvertTo-OneWord "$(adb shell getprop ro.product.model)") $Stamp.txt"
-    Say ""
-    Say "  Collecting phone info. Keep the phone plugged in and unlocked..." 'Cyan'
-    Say ""
-
-    Start-Transcript -Path $out -Force | Out-Null
-
-    Say "  [1/9] Device identity..." 'DarkGray'
-    "=== DEVICE ==="
-    adb shell getprop ro.product.manufacturer
-    adb shell getprop ro.product.model
-    adb shell getprop ro.product.name
-    adb shell getprop ro.build.version.release
-    adb shell getprop ro.build.version.sdk
-    adb shell getprop ro.build.version.security_patch
-    adb shell getprop ro.build.display.id
-    adb shell getprop ro.board.platform
-
-    Say "  [2/9] All system properties..." 'DarkGray'
-    "=== FULL PROPERTIES ==="
-    adb shell getprop
-
-    Say "  [3/9] Hardware..." 'DarkGray'
-    "=== CPU ==="
-    adb shell cat /proc/cpuinfo
-    "=== MEMORY ==="
-    adb shell cat /proc/meminfo
-    "=== MEMORY SUMMARY ==="
-    adb shell dumpsys meminfo | Select-Object -First 30
-
-    Say "  [4/9] Storage..." 'DarkGray'
-    "=== STORAGE ==="
-    adb shell df -h
-
-    Say "  [5/9] Battery..." 'DarkGray'
-    "=== BATTERY ==="
-    adb shell dumpsys battery
-    "=== BATTERY USAGE (TOP) ==="
-    adb shell dumpsys batterystats --charged | Select-Object -First 150
-
-    Say "  [6/9] Display..." 'DarkGray'
-    "=== DISPLAY ==="
-    adb shell wm size
-    adb shell wm density
-    adb shell settings get system screen_off_timeout
-
-    Say "  [7/9] Network..." 'DarkGray'
-    "=== NETWORK ==="
-    adb shell ip -br a
-    adb shell dumpsys wifi | Select-Object -First 25
-
-    Say "  [8/9] Apps..." 'DarkGray'
-    "=== USER-INSTALLED APPS ==="
-    adb shell pm list packages -3
-    "=== DISABLED APPS ==="
-    adb shell pm list packages -d
-    "=== TOTAL PACKAGE COUNT ==="
-    (adb shell pm list packages).Count
-
-    Say "  [9/9] Power management..." 'DarkGray'
-    "=== DOZE / STANDBY ==="
-    adb shell dumpsys deviceidle | Select-Object -First 50
-    "=== RECENT CRASHES ==="
-    adb shell logcat -d -b crash -t 100
-
-    Stop-Transcript | Out-Null
-    Finish-Report -Path $out -Label 'Phone report'
+    if (-not (Ensure-Adb)) { return }
+    $serial = Wait-ForPhone
+    if (-not $serial) { return }
+    $adb = (Get-Command adb).Source
+    $model = "$(& $adb -s $serial shell getprop ro.product.model)".Trim()
+    Write-Report (Join-Path $OutDir "Data Phone $(ConvertTo-OneWord $model) $Stamp.txt") 'ANDROID' "Device: $model" `
+        'Takes about a minute. Keep the phone plugged in and unlocked.' @{ Adb = $adb; Serial = $serial } $PhoneSections
 }
 
 # =====================================================================
@@ -533,6 +930,7 @@ switch ($choice) {
     '3' { Get-LaptopReport; Get-PhoneReport }
 }
 
+Say ""
 Say "  Reports are in: $OutDir" 'Green'
 Say ""
 # This window was opened just for the report, so pause before it closes
