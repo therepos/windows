@@ -75,7 +75,7 @@ def html_rows(run_by_command):
             # served from the page itself, so the browser downloads it instead of showing text
             os.makedirs(os.path.join(OUT_DIR, 'apps'), exist_ok=True)
             shutil.copy(os.path.join('apps', filename), os.path.join(OUT_DIR, 'apps', filename))
-            button = '<a class="btn" href="apps/{}" download>Download {}</a>'.format(html.escape(filename, quote=True), KINDS[ext])
+            button = '<a class="btn" href="apps/{}" download>Download {}</a>'.format(html.escape(filename, quote=True), ext)
         rows.append(row(name, purpose, button))
     return '\n'.join(rows)
 
@@ -95,7 +95,7 @@ h2{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;
 .hint{color:var(--muted);margin:0 0 1rem}
 input{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--text);font-size:15px}
 .list{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
-.row{display:grid;grid-template-columns:180px 1fr 170px;gap:4px 16px;align-items:center;padding:10px 14px;border-top:1px solid var(--line)}
+.row{display:grid;grid-template-columns:180px 1fr 140px;gap:4px 16px;align-items:center;padding:10px 14px;border-top:1px solid var(--line)}
 .row:first-child{border-top:0}
 .row b{font-weight:600}
 .row p{margin:0;color:var(--muted);font-size:14px}
@@ -104,7 +104,7 @@ button:hover,.btn:hover{background:var(--bg)}
 button.done{color:var(--ok);border-color:var(--ok)}
 footer{margin-top:2.5rem;padding-top:1rem;border-top:1px solid var(--line);color:var(--muted);font-size:14px}
 footer a{color:inherit}
-@media (max-width:640px){.row{grid-template-columns:1fr 170px}.row p{grid-column:1/-1;grid-row:2}}
+@media (max-width:640px){.row{grid-template-columns:1fr 140px}.row p{grid-column:1/-1;grid-row:2}}
 </style>
 </head>
 <body>
