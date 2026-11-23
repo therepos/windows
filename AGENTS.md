@@ -35,7 +35,7 @@ always work. Proxmox tools: `therepos/proxmox`; MCP servers: `therepos/mcp`; Cla
     hidden or scheduled run) puts the window on the right half of its screen.
   - `shortcut`: every script with a menu offers Settings > `Shortcut '<name>'  [on/off]`. It saves a local
     copy in `%LOCALAPPDATA%\<name>` and adds `function <name> { & "$env:LOCALAPPDATA\<name>\<name>.ps1" }`
-    to `$PROFILE`; nothing is fetched when it runs, and off/on refreshes the copy. Use `Show-ShortcutSettings`
+    to `$PROFILE`; nothing is fetched when it runs, and off/on downloads the latest copy (keeping the old one if the download fails). Use `Show-ShortcutSettings`
     when the shortcut is the only setting, else `Test-Shortcut` / `Switch-Shortcut` in the script's Settings.
 - Per-tool files (tools, settings, logs, local copy) go in `%LOCALAPPDATA%\<name>`, fetched without admin.
 - Secrets: never hard-coded; ask once, save DPAPI-encrypted (`ConvertFrom-SecureString`) in `settings.json`.

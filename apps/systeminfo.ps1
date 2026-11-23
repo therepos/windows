@@ -1647,6 +1647,24 @@ function Test-Shortcut {
     (Test-Path -LiteralPath $PROFILE) -and (Test-Path -LiteralPath (Get-ShortcutCopy)) -and
         (@(Get-Content -LiteralPath $PROFILE -ErrorAction SilentlyContinue) -contains (Get-ShortcutLine))
 }
+# Downloads the latest script over the local copy; the copy is only replaced by a complete download
+function Save-ShortcutCopy($copy) {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $tmp = "$copy.new"
+    $raw = $ScriptUrl -replace '^https://github\.com/([^/]+/[^/]+)/raw/', 'https://raw.githubusercontent.com/$1/'
+    foreach ($url in $ScriptUrl, $raw, $ScriptUrl) {
+        try {
+            Invoke-WebRequest -Uri "${url}?$(Get-Random)" -OutFile $tmp -UseBasicParsing -ErrorAction Stop
+            if (Select-String -LiteralPath $tmp -SimpleMatch '$ScriptUrl' -Quiet) {
+                Move-Item -LiteralPath $tmp -Destination $copy -Force
+                return $true
+            }
+        } catch {}
+        Start-Sleep -Seconds 2
+    }
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    return $false
+}
 function Switch-Shortcut([switch]$KeepCopy) {
     $name = Get-ShortcutName
     $copy = Get-ShortcutCopy
@@ -1657,16 +1675,22 @@ function Switch-Shortcut([switch]$KeepCopy) {
             @(Get-Content -LiteralPath $PROFILE) | Where-Object { $_ -notmatch "^function $name " } | Set-Content -LiteralPath $PROFILE
         }
         if ($on) {
-            if (-not $KeepCopy) { Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue }
+            if (-not $KeepCopy) {
+                # Kept in memory so a failed download on the next "on" can restore it
+                if (Test-Path -LiteralPath $copy) { $script:ShortcutKept = [IO.File]::ReadAllBytes($copy) }
+                Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue
+            }
             Say "  Shortcut removed." 'Green'
             return
         }
         New-Item -ItemType Directory -Path (Split-Path -Path $copy -Parent) -Force | Out-Null
-        if ($PSCommandPath -and (Test-Path -LiteralPath $PSCommandPath)) {
-            if ($PSCommandPath -ne $copy) { Copy-Item -LiteralPath $PSCommandPath -Destination $copy -Force }
-        } else {
-            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-            Invoke-WebRequest -Uri "${ScriptUrl}?$(Get-Random)" -OutFile $copy -UseBasicParsing
+        $stale = $false
+        if ($PSCommandPath -and ($PSCommandPath -ne $copy) -and (Test-Path -LiteralPath $PSCommandPath)) {
+            Copy-Item -LiteralPath $PSCommandPath -Destination $copy -Force
+        } elseif (-not (Save-ShortcutCopy $copy)) {
+            if ($script:ShortcutKept -and -not (Test-Path -LiteralPath $copy)) { [IO.File]::WriteAllBytes($copy, $script:ShortcutKept) }
+            if (-not (Test-Path -LiteralPath $copy)) { throw 'the download failed. Check the connection and try again.' }
+            $stale = $true
         }
         Unblock-File -LiteralPath $copy -ErrorAction SilentlyContinue
         if ((Get-ExecutionPolicy -Scope CurrentUser) -in 'Undefined', 'Restricted', 'AllSigned') {
@@ -1675,6 +1699,7 @@ function Switch-Shortcut([switch]$KeepCopy) {
         if (-not (Test-Path -LiteralPath $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
         Add-Content -LiteralPath $PROFILE "`n$(Get-ShortcutLine)"
         Say "  Shortcut added. In a new PowerShell window, just type: $name" 'Green'
+        if ($stale) { Say "  Could not download the latest version; kept the previous copy." 'Yellow' }
     } catch {
         Say "  Could not change the shortcut: $($_.Exception.Message)" 'Red'
     }
