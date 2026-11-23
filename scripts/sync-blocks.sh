@@ -66,7 +66,7 @@ BLOCK
 
 # elevate: re-run this script as admin, in Windows Terminal when installed (Windows ignores
 # the default-terminal setting for admin windows). From GitHub it re-runs the bootstrap, from a
-# file (shortcut) that file. -NoExit keeps the admin window open after a one-shot script.
+# file (shortcut) that file, then closes this window. -NoExit keeps the admin window open after a one-shot script.
 # shellcheck disable=SC2034  # read via ${!var} below
 BLOCK_elevate=$(cat <<'BLOCK'
 function Test-Admin {
@@ -97,8 +97,16 @@ function Start-Elevated([string]$ScriptUrl, [switch]$NoExit) {
             }
         }
     }
-    if (-not $opened) { Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $psArgs }
-    Write-Host "  Continue in the new (elevated) window. You can close this one." -ForegroundColor Gray
+    if (-not $opened) {
+        try {
+            Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $psArgs -ErrorAction Stop
+        } catch {
+            Write-Host "  Cancelled." -ForegroundColor Yellow
+            return
+        }
+    }
+    # Only the admin window stays open
+    [Environment]::Exit(0)
 }
 BLOCK
 )

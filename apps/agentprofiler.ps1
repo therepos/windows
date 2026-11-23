@@ -38,8 +38,16 @@ function Start-Elevated([string]$ScriptUrl, [switch]$NoExit) {
             }
         }
     }
-    if (-not $opened) { Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $psArgs }
-    Write-Host "  Continue in the new (elevated) window. You can close this one." -ForegroundColor Gray
+    if (-not $opened) {
+        try {
+            Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $psArgs -ErrorAction Stop
+        } catch {
+            Write-Host "  Cancelled." -ForegroundColor Yellow
+            return
+        }
+    }
+    # Only the admin window stays open
+    [Environment]::Exit(0)
 }
 # <<< elevate
 $IsAdmin = Test-Admin
