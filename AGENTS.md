@@ -29,7 +29,8 @@ always work. Proxmox tools: `therepos/proxmox`; MCP servers: `therepos/mcp`; Cla
   - `elevate`: `if (-not (Test-Admin)) { Start-Elevated $ScriptUrl; return }`, only when admin is needed;
     `-NoExit` for one-shot scripts whose output must stay. Re-runs the bootstrap, or the local copy when
     started from a shortcut, in an admin Windows Terminal window (Windows ignores the default-terminal
-    setting for admin windows); classic console when Terminal is missing.
+    setting for admin windows); classic console when Terminal is missing. Once it opens, the original
+    window closes (only one window at a time); if the admin prompt is refused, it stays with `Cancelled.`
   - `layout`: `Set-WindowRight` at top level before the first screen (after the elevate check, never in a
     hidden or scheduled run) puts the window on the right half of its screen.
   - `shortcut`: every script with a menu offers Settings > `Shortcut '<name>'  [on/off]`. It saves a local
