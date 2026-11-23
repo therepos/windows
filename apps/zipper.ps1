@@ -528,7 +528,7 @@ function Set-WindowLayout {
         $area = New-Object ZipperWin+RECT
         [void][ZipperWin]::SystemParametersInfoW(0x30, 0, [ref]$area, 0)
         $height = $area.Bottom - $area.Top
-        $width  = [Math]::Max(560, [int](($area.Right - $area.Left) * 0.30))
+        $width  = [int][Math]::Floor(($area.Right - $area.Left) / 2)
 
         # Under Windows Terminal the console is a hidden window owned by the terminal
         $console = [ZipperWin]::GetConsoleWindow()
